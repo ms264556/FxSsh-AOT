@@ -3,18 +3,18 @@ using System.Text;
 
 namespace FxSsh.Algorithms
 {
-    public class DssKey : PublicKeyAlgorithm
+    public class Rsa256Key : PublicKeyAlgorithm
     {
-        private readonly DSACryptoServiceProvider _algorithm = new DSACryptoServiceProvider();
+        private readonly RSACryptoServiceProvider _algorithm = new RSACryptoServiceProvider();
 
-        public DssKey(string key = null)
+        public Rsa256Key(string key = null)
             : base(key)
         {
         }
 
         public override string Name
         {
-            get { return "ssh-dss"; }
+            get { return "rsa-sha2-256"; }
         }
 
         public override void ImportKey(byte[] bytes)
@@ -34,11 +34,9 @@ namespace FxSsh.Algorithms
                 if (worker.ReadString(Encoding.ASCII) != this.Name)
                     throw new CryptographicException("Key and certificates were not created with this algorithm.");
 
-                var args = new DSAParameters();
-                args.P = worker.ReadMpint();
-                args.Q = worker.ReadMpint();
-                args.G = worker.ReadMpint();
-                args.Y = worker.ReadMpint();
+                var args = new RSAParameters();
+                args.Exponent = worker.ReadMpint();
+                args.Modulus = worker.ReadMpint();
 
                 _algorithm.ImportParameters(args);
             }
@@ -51,10 +49,8 @@ namespace FxSsh.Algorithms
                 var args = _algorithm.ExportParameters(false);
 
                 worker.Write(this.Name, Encoding.ASCII);
-                worker.WriteMpint(args.P);
-                worker.WriteMpint(args.Q);
-                worker.WriteMpint(args.G);
-                worker.WriteMpint(args.Y);
+                worker.WriteMpint(args.Exponent);
+                worker.WriteMpint(args.Modulus);
 
                 return worker.ToByteArray();
             }
@@ -62,22 +58,22 @@ namespace FxSsh.Algorithms
 
         public override bool VerifyData(byte[] data, byte[] signature)
         {
-            return _algorithm.VerifyData(data, signature);
+            return _algorithm.VerifyData(data, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         }
 
         public override bool VerifyHash(byte[] hash, byte[] signature)
         {
-            return _algorithm.VerifyHash(hash, "SHA1", signature);
+            return _algorithm.VerifyHash(hash, signature, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         }
 
         public override byte[] SignData(byte[] data)
         {
-            return _algorithm.SignData(data);
+            return _algorithm.SignData(data, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         }
 
         public override byte[] SignHash(byte[] hash)
         {
-            return _algorithm.SignHash(hash, "SHA1");
+            return _algorithm.SignHash(hash, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         }
     }
 }

@@ -3,18 +3,18 @@ using System.Text;
 
 namespace FxSsh.Algorithms
 {
-    public class RsaKey : PublicKeyAlgorithm
+    public class Rsa512Key : PublicKeyAlgorithm
     {
         private readonly RSACryptoServiceProvider _algorithm = new RSACryptoServiceProvider();
 
-        public RsaKey(string key = null)
+        public Rsa512Key(string key = null)
             : base(key)
         {
         }
 
         public override string Name
         {
-            get { return "ssh-rsa"; }
+            get { return "rsa-sha2-512"; }
         }
 
         public override void ImportKey(byte[] bytes)
@@ -58,22 +58,22 @@ namespace FxSsh.Algorithms
 
         public override bool VerifyData(byte[] data, byte[] signature)
         {
-            return _algorithm.VerifyData(data, signature, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
+            return _algorithm.VerifyData(data, signature, HashAlgorithmName.SHA512, RSASignaturePadding.Pkcs1);
         }
 
         public override bool VerifyHash(byte[] hash, byte[] signature)
         {
-            return _algorithm.VerifyHash(hash, signature, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
+            return _algorithm.VerifyHash(hash, signature, HashAlgorithmName.SHA512, RSASignaturePadding.Pkcs1);
         }
 
         public override byte[] SignData(byte[] data)
         {
-            return _algorithm.SignData(data, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
+            return _algorithm.SignData(data, HashAlgorithmName.SHA512, RSASignaturePadding.Pkcs1);
         }
 
         public override byte[] SignHash(byte[] hash)
         {
-            return _algorithm.SignHash(hash, HashAlgorithmName.SHA1, RSASignaturePadding.Pkcs1);
+            return _algorithm.SignHash(hash, HashAlgorithmName.SHA512, RSASignaturePadding.Pkcs1);
         }
     }
 }

@@ -70,8 +70,8 @@ namespace FxSsh
             _keyExchangeAlgorithms.Add("diffie-hellman-group14-sha1", () => new DiffieHellmanGroupSha1(new DiffieHellman(2048)));
             _keyExchangeAlgorithms.Add("diffie-hellman-group1-sha1", () => new DiffieHellmanGroupSha1(new DiffieHellman(1024)));
 
-            _publicKeyAlgorithms.Add("ssh-rsa", x => new RsaKey(x));
-            _publicKeyAlgorithms.Add("ssh-dss", x => new DssKey(x));
+            _publicKeyAlgorithms.Add("rsa-sha2-256", x => new Rsa256Key(x));
+            _publicKeyAlgorithms.Add("rsa-sha2-512", x => new Rsa512Key(x));
 
             _encryptionAlgorithms.Add("aes128-ctr", () => new CipherInfo(new AesCryptoServiceProvider(), 128, CipherModeEx.CTR));
             _encryptionAlgorithms.Add("aes192-ctr", () => new CipherInfo(new AesCryptoServiceProvider(), 192, CipherModeEx.CTR));
@@ -81,8 +81,8 @@ namespace FxSsh
             _encryptionAlgorithms.Add("aes192-cbc", () => new CipherInfo(new AesCryptoServiceProvider(), 192, CipherModeEx.CBC));
             _encryptionAlgorithms.Add("aes256-cbc", () => new CipherInfo(new AesCryptoServiceProvider(), 256, CipherModeEx.CBC));
 
-            _hmacAlgorithms.Add("hmac-md5", () => new HmacInfo(new HMACMD5(), 128));
-            _hmacAlgorithms.Add("hmac-sha1", () => new HmacInfo(new HMACSHA1(), 160));
+            _hmacAlgorithms.Add("hmac-sha2-256", () => new HmacInfo(new HMACSHA256(), 256));
+            _hmacAlgorithms.Add("hmac-sha2-512", () => new HmacInfo(new HMACSHA512(), 512));
 
             _compressionAlgorithms.Add("none", () => new NoCompression());
 
@@ -539,7 +539,7 @@ namespace FxSsh
         private void HandleMessage(KeyExchangeDhInitMessage message)
         {
             var kexAlg = _keyExchangeAlgorithms[_exchangeContext.KeyExchange]();
-            var hostKeyAlg = _publicKeyAlgorithms[_exchangeContext.PublicKey](_hostKey[_exchangeContext.PublicKey].ToString());
+            var hostKeyAlg = _publicKeyAlgorithms[_exchangeContext.PublicKey](_hostKey[_exchangeContext.PublicKey]);
             var clientCipher = _encryptionAlgorithms[_exchangeContext.ClientEncryption]();
             var serverCipher = _encryptionAlgorithms[_exchangeContext.ServerEncryption]();
             var serverHmac = _hmacAlgorithms[_exchangeContext.ServerHmac]();
