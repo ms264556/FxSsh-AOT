@@ -7,7 +7,7 @@ FxSsh is a lightweight [SSH](https://en.wikipedia.org/wiki/Secure_Shell) server 
 
 `PM> Install-Package FxSsh`
 
-Target `netstandard2.1`
+Target `net8.0`
 
 ### RFCs
 FxSsh adheres to the following RFC documents
@@ -16,6 +16,7 @@ FxSsh adheres to the following RFC documents
 - [RFC4252](https://tools.ietf.org/html/rfc4252)  Authentication Protocol
 - [RFC4253](https://tools.ietf.org/html/rfc4253)  Transport Layer Protocol
 - [RFC4254](https://tools.ietf.org/html/rfc4254)  Connection Protocol
+- [RFC4344](https://tools.ietf.org/html/rfc4344)  Transport Layer Encryption Modes
 - [RFC6668](https://tools.ietf.org/html/rfc6668)  SHA-2 Data Integrity Algorithms
 - [RFC8332](https://tools.ietf.org/html/rfc8332)  Use of RSA Keys with SHA-2
 
@@ -25,11 +26,38 @@ static int windowWidth, windowHeight;
 
 static void Main(string[] args)
 {
-    var rsa2048BitKey = "BwIAAACkAABSU0EyAAgAAAEAAQCpLaQogjN/CB7fkJ6vqlh0M+bgkmTs60JnwBGhKP5X8JWRZrjtcKmeVsSX/xg119dCMnm+lgr7E38Wo/rruWvVBkIsVw61K/8Hte+EagenhM9PBsJ2nMopdUTSYomjmXJKq71l/sxNgqQlRQr6KngUjCga+e258H5c7KOlxMZA6mL12zIsGz0+paBwj6hlHYOMkTTXG2pJZrFqbab2QIJj3ckRZOjJL1/AhV2NZq9O5jOEmVN5n248RYE4FrAJDXCp+X9uQvgDateUYAnqyO5Rphg7EHfGaPSMcsmRwr6rku4JvwhJuEm/RD2QQbbLWA3Ne+KthROzhwrxJJqs8gSlW125ZCbzKb42c1cEC/SZN/Ika7nnswEKYRRxx9pAXpkVOwWYc3vDiDNciOexR65RyaY3Lg9AHUzEwwS4fZQxG2Rowl1sNNWbN8QfXBdSpTmzkNdH1da1NgB0GcqyL90Xll/dXjyM2+J1LQ0XvJgyCiX6vXYjTUOyk0pElFcPyMtLvAWJAqA2GUxRiWmytkTsm5yOY3tYaFl88wPckYoR1Cq4WGZafvOBfzUPWzKGTUKt3d02VKeSVupYfo2XRiCK1a6OqmB1p6uLQTEHm7w+YN0qiDU8m8CXVz1YwKEQ4NRIhJLwZGkLb6pHT/jU3bEsJkOPniYmEcEkXgZtSR1Oz6+brU4CyblqiJEd+DF4XQ+KxKCECuVj045oiVM5HQNkqGWo4zamLsAsr+PMQ63WdQGF5d3Emi/XFmit/FE5oENr9/Of7X3/f5z+ahU3bDHJNd7gPjQrp07HbLgwmQM1xKKDrqRFbox5d5edr5Sn4Ce6rQI5zt17AtdVDeKVixJ1/z1LUBnVvjR7OcPTfAA4Ea8vpalqZpDtuj9bnr7I5amwW9EvC6XtTKgaIQanh4ZQ9YpFthzfHWJNETPUgaAaB7Cs90HxRFkufAIeYpRxeeFkCxkeTxIAbCXSVXkqnFvXrTIo3cSZNZxhFW5XvRZdgv5ohSbWw9krxTqC0NJcs7mNCSbVnJeNx4ugu0+ZTFBhLIv1X1AC/CJ0pVjiHIV98KP3Vf4XoZfJvoXSDTe/9sorYofe9mlIAvidTM0umOYGu7+e2MS9pySk3/YhnhyQNhqm1Ae9AvAA6RyCG2uYiLuzwf74BorfGDzSw28BVgGxWnnuFW+RtkUINE1vdaJQM10iaTQ5nkHWJvvbQoE3acIOZ8V1MOLLAn6NfW9o58OBlwg73kTL3DW4wofi1N5ztH3D6OXAltrAWwdbaf2rrTlfvoMfntr+IV5sD3CFeGw5BJGVhkS9piinCrfwfIsMyL9ODZBp628yzudPsl8Q24bDNNioXF6XgdThGVSqPrbljc1ZNQmYnfWiSHUIUC2cnlwkv4i7N9sy41Vs3oirWGYI32r06n5DaWeKC6gQIUkv8/mYEIbyab20HS4BLDiUuJeEniOBkWVE38HvIekZGucrBTK5iWdk7xrpBrEJt/uxxaksci4FoiUTMft9Ek/McUEwV9Ev7K4db9Lo1SbqrYk=";
+    var rsa2048BitPem = @"-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQClBPKsmiTxCoez
+E4Wt4nvNDVjLtkGQPUS/SbhJCL8J7pKrvsKRyXKM9GjGdxA7GKZR7sjqCWCU12oD
++EJuf/mpcA0JsBY4gUU8bp95U5mEM+ZOr2aNXYXAXy/J6GQRyd1jgkD2pm1qsWZJ
+ahvXNJGMgx1lqI9woKU+PRssMtv1YupAxsSlo+xcfvC57fkaKIwUeCr6CkUlpIJN
+zP5lvatKcpmjiWLSRHUpypx2wgZPz4SnB2qE77UH/yu1DlcsQgbVa7nr+qMWfxP7
+Cpa+eTJC19c1GP+XxFaeqXDtuGaRlfBX/iihEcBnQuvsZJLg5jN0WKqvnpDfHgh/
+M4IopC2pAgMBAAECggEBAImt6ibV6NJvHa7sL9FXMEFxzE8SffsxEyWiBS5yLKnF
+sfu3CbEG6RrvZGeJuTIFK+caGekh78HfRGWRgSOehJe4lDgsAS4dtL1p8oYQmPnz
+L0khEKgLimdpQ37q9GrfCGZYq4jebFXjMts3u4i/JFyenC1QCHVIovWdmAk1Wc2N
+5bY+qlQZ4dSBl15cqNg0w4bbEF+yT+fOMm/raZANTr/IDIt88LcKpyimvUSGlZEE
+OWx4hXAPbF4h/tqeH4O+Xzmtq/1pWwdbwNqWwOXow320c97U4ofCuDXcy0TeOwiX
+gcPnaG99jX4Cy+IwdcVnDsJpN4FC2/sm1kGeOTRpIl0CgYEAy8gPV5RESpOyQ00j
+dr36JQoymLwXDS114tuMPF7dX5YX3S+yyhl0ADa11tVH15CzOaVSF1wfxDeb1TRs
+XcJoZBsxlH24BMPETB1ADy43pslRrkex54hcM4jDe3OYBTsVmV5A2sdxFGEKAbPn
+uWsk8jeZ9AsEV3M2vinzJmS5XVsCgYEAz04dSW0GXiTBESYmno9DJiyx3dT4T0eq
+bwtpZPCShEjU4BChwFg9V5fAmzw1iCrdYD68mwcxQYurp3Vgqo6u1YogRpeNfljq
+VpKnVDbd3a1CTYYyWw81f4HzflpmWLgq1BGKkdwD83xZaFh7Y46cm+xEtrJpiVFM
+GTagAokFvEsCgYB1EouV4g1V1wJ73c45Aq26J+CnlK+dl3d5jG5FpK6DosQ1A5kw
+uGzHTqcrND7g3jXJMWw3FWr+nH//fe2f8/drQ6A5UfytaBbXL5rE3eWFAXXWrUPM
+468swC6mNuOoZahkAx05U4lojtNj5QqEoMSKD114MfgdkYhquckCTq2brwKBgQC5
+s1zS0II6xSvZw9YmhWj+gl0WvVduFWGcNZnE3SgyrddbnCp5VdIlbAASTx4ZC2Th
+eXGUYh4CfC5ZRPFB96ywBxqggdQzEU1iHd8ctkWK9VCGh6cGIRqoTO2lCy/RW7Cp
+5ci+nls/uu2QZmqppS+vETgAfNPDOXs0vtUZUEs9/wKBgDNQonVvTTQIRbaRbxXu
+eVqxAVYBb8PSPBjfigb4/sGzu4iYaxuCHOkA8AK9B9SmGjaQHJ4h9t+kJKe9xNie
+v7sG5pguzUyd+AJIafbeh2Iryva/Nw3Shb7Jl6EX/lX3o/B9hRziWKV0IvwCUF/1
+iyxhUEyZT7ugi8eNl5zVJgmN
+-----END PRIVATE KEY-----";
 
     var server = new SshServer();
-    server.AddHostKey("rsa-sha2-256", rsa2048BitKey);
-    server.AddHostKey("rsa-sha2-512", rsa2048BitKey);
+    server.AddHostKey("rsa-sha2-256", rsa2048BitPem);
+    server.AddHostKey("rsa-sha2-512", rsa2048BitPem);
     server.ConnectionAccepted += server_ConnectionAccepted;
 
     server.Start();
@@ -159,6 +187,11 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
         // do something more
     }
 }
+```
+
+### Generate private key
+```cs
+KeyGenerator.GenerateRsaKeyPem(2048); \\ generate rsa key with 2048 bits
 ```
 
 ---

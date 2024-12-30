@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 
 namespace FxSsh.Services
 {
-    public class ConnectionService : SshService, IDynamicInvoker
+    public class ConnectionService : SshService
     {
         private readonly object _locker = new object();
         private readonly List<Channel> _channels = new List<Channel>();
@@ -55,7 +55,7 @@ namespace FxSsh.Services
             Contract.Requires(message != null);
 
             if (message is ChannelWindowAdjustMessage)
-                this.InvokeHandleMessage(message);
+                this.HandleMessage((dynamic)message);
             else
                 _messageQueue.Add(message);
         }
@@ -67,7 +67,7 @@ namespace FxSsh.Services
                 while (true)
                 {
                     var message = _messageQueue.Take(_messageCts.Token);
-                    this.InvokeHandleMessage(message);
+                    this.HandleMessage((dynamic)message);
                 }
             }
             catch (OperationCanceledException)

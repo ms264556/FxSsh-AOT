@@ -5,7 +5,7 @@ using System.Diagnostics.Contracts;
 
 namespace FxSsh.Services
 {
-    public class UserauthService : SshService, IDynamicInvoker
+    public class UserauthService : SshService
     {
         public UserauthService(Session session)
             : base(session)
@@ -24,7 +24,7 @@ namespace FxSsh.Services
         {
             Contract.Requires(message != null);
 
-            this.InvokeHandleMessage(message);
+            this.HandleMessage((dynamic)message);
         }
 
         private void HandleMessage(RequestMessage message)
@@ -117,6 +117,10 @@ namespace FxSsh.Services
                 _session.RegisterService(message.ServiceName, args);
                 Succeed?.Invoke(this, message.ServiceName);
                 _session.SendMessage(new SuccessMessage());
+            }
+            else
+            {
+                _session.SendMessage(new FailureMessage());
             }
         }
     }

@@ -14,7 +14,7 @@ using System.Threading;
 
 namespace FxSsh
 {
-    public class Session : IDynamicInvoker
+    public class Session
     {
         private const byte CarriageReturn = 0x0d;
         private const byte LineFeed = 0x0a;
@@ -22,7 +22,6 @@ namespace FxSsh
         internal const int InitialLocalWindowSize = LocalChannelDataPacketSize * 32;
         internal const int LocalChannelDataPacketSize = 1024 * 32;
 
-        private static readonly RandomNumberGenerator _rng = new RNGCryptoServiceProvider();
         private static readonly Dictionary<byte, Type> _messagesMetadata;
         internal static readonly Dictionary<string, Func<KexAlgorithm>> _keyExchangeAlgorithms =
             new Dictionary<string, Func<KexAlgorithm>>();
@@ -64,22 +63,16 @@ namespace FxSsh
 
         static Session()
         {
-            _keyExchangeAlgorithms.Add("diffie-hellman-group18-sha512", () => new DiffieHellmanGroupSha512(new DiffieHellman(8192)));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group16-sha512", () => new DiffieHellmanGroupSha512(new DiffieHellman(4096)));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group14-sha256", () => new DiffieHellmanGroupSha256(new DiffieHellman(2048)));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group14-sha1", () => new DiffieHellmanGroupSha1(new DiffieHellman(2048)));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group1-sha1", () => new DiffieHellmanGroupSha1(new DiffieHellman(1024)));
+            _keyExchangeAlgorithms.Add("diffie-hellman-group18-sha512", () => new DiffieHellmanKex(512, 8192));
+            _keyExchangeAlgorithms.Add("diffie-hellman-group16-sha512", () => new DiffieHellmanKex(512, 4096));
+            _keyExchangeAlgorithms.Add("diffie-hellman-group14-sha256", () => new DiffieHellmanKex(256, 2048));
 
-            _publicKeyAlgorithms.Add("rsa-sha2-256", x => new Rsa256Key(x));
-            _publicKeyAlgorithms.Add("rsa-sha2-512", x => new Rsa512Key(x));
+            _publicKeyAlgorithms.Add("rsa-sha2-256", x => new RsaKey(256, x));
+            _publicKeyAlgorithms.Add("rsa-sha2-512", x => new RsaKey(512, x));
 
-            _encryptionAlgorithms.Add("aes128-ctr", () => new CipherInfo(new AesCryptoServiceProvider(), 128, CipherModeEx.CTR));
-            _encryptionAlgorithms.Add("aes192-ctr", () => new CipherInfo(new AesCryptoServiceProvider(), 192, CipherModeEx.CTR));
-            _encryptionAlgorithms.Add("aes256-ctr", () => new CipherInfo(new AesCryptoServiceProvider(), 256, CipherModeEx.CTR));
-            _encryptionAlgorithms.Add("aes128-cbc", () => new CipherInfo(new AesCryptoServiceProvider(), 128, CipherModeEx.CBC));
-            _encryptionAlgorithms.Add("3des-cbc", () => new CipherInfo(new TripleDESCryptoServiceProvider(), 192, CipherModeEx.CBC));
-            _encryptionAlgorithms.Add("aes192-cbc", () => new CipherInfo(new AesCryptoServiceProvider(), 192, CipherModeEx.CBC));
-            _encryptionAlgorithms.Add("aes256-cbc", () => new CipherInfo(new AesCryptoServiceProvider(), 256, CipherModeEx.CBC));
+            _encryptionAlgorithms.Add("aes128-ctr", () => new CipherInfo(Aes.Create(), 128, CipherModeEx.CTR));
+            _encryptionAlgorithms.Add("aes192-ctr", () => new CipherInfo(Aes.Create(), 192, CipherModeEx.CTR));
+            _encryptionAlgorithms.Add("aes256-ctr", () => new CipherInfo(Aes.Create(), 256, CipherModeEx.CTR));
 
             _hmacAlgorithms.Add("hmac-sha2-256", () => new HmacInfo(new HMACSHA256(), 256));
             _hmacAlgorithms.Add("hmac-sha2-512", () => new HmacInfo(new HMACSHA512(), 512));
@@ -399,7 +392,7 @@ namespace FxSsh
             var packetLength = (uint)payload.Length + paddingLength + 1;
 
             var padding = new byte[paddingLength];
-            _rng.GetBytes(padding);
+            RandomNumberGenerator.Fill(padding);
 
             using (var worker = new SshDataWorker())
             {
@@ -479,7 +472,7 @@ namespace FxSsh
         {
             var message = new KeyExchangeInitMessage();
             message.KeyExchangeAlgorithms = _keyExchangeAlgorithms.Keys.ToArray();
-            message.ServerHostKeyAlgorithms = _publicKeyAlgorithms.Keys.ToArray();
+            message.ServerHostKeyAlgorithms = _publicKeyAlgorithms.Keys.Intersect(_hostKey.Keys).ToArray();
             message.EncryptionAlgorithmsClientToServer = _encryptionAlgorithms.Keys.ToArray();
             message.EncryptionAlgorithmsServerToClient = _encryptionAlgorithms.Keys.ToArray();
             message.MacAlgorithmsClientToServer = _hmacAlgorithms.Keys.ToArray();
@@ -498,7 +491,7 @@ namespace FxSsh
         #region Handle messages
         private void HandleMessageCore(Message message)
         {
-            this.InvokeHandleMessage(message);
+            this.HandleMessage((dynamic)message);
         }
 
         private void HandleMessage(DisconnectMessage message)
@@ -525,7 +518,7 @@ namespace FxSsh
             });
 
             _exchangeContext.KeyExchange = ChooseAlgorithm(_keyExchangeAlgorithms.Keys.ToArray(), message.KeyExchangeAlgorithms);
-            _exchangeContext.PublicKey = ChooseAlgorithm(_publicKeyAlgorithms.Keys.ToArray(), message.ServerHostKeyAlgorithms);
+            _exchangeContext.PublicKey = ChooseAlgorithm(_publicKeyAlgorithms.Keys.Intersect(_hostKey.Keys).ToArray(), message.ServerHostKeyAlgorithms);
             _exchangeContext.ClientEncryption = ChooseAlgorithm(_encryptionAlgorithms.Keys.ToArray(), message.EncryptionAlgorithmsClientToServer);
             _exchangeContext.ServerEncryption = ChooseAlgorithm(_encryptionAlgorithms.Keys.ToArray(), message.EncryptionAlgorithmsServerToClient);
             _exchangeContext.ClientHmac = ChooseAlgorithm(_hmacAlgorithms.Keys.ToArray(), message.MacAlgorithmsClientToServer);

@@ -11,13 +11,11 @@ namespace FxSsh.Algorithms
         public PublicKeyAlgorithm(string key)
         {
             if (!string.IsNullOrEmpty(key))
-            {
-                var bytes = Convert.FromBase64String(key);
-                ImportKey(bytes);
-            }
+                ImportKey(key);
         }
 
         public abstract string Name { get; }
+        public virtual string PublicKeyName { get { return Name; } }
 
         public string GetFingerprint()
         {
@@ -57,9 +55,9 @@ namespace FxSsh.Algorithms
             }
         }
 
-        public abstract void ImportKey(byte[] bytes);
+        public abstract void ImportKey(string key);
 
-        public abstract byte[] ExportKey();
+        public abstract string ExportKey();
 
         public abstract void LoadKeyAndCertificatesData(byte[] data);
 
