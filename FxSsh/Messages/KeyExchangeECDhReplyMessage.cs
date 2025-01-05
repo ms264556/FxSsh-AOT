@@ -1,17 +1,15 @@
-﻿using System;
-
-namespace FxSsh.Messages
+﻿namespace FxSsh.Messages
 {
-    public class KeyExchangeDhReplyMessage : KeyExchangeXReplyMessage
+    public class KeyExchangeECDhReplyMessage : KeyExchangeXReplyMessage
     {
         public byte[] HostKey { get; set; }
-        public byte[] F { get; set; }
+        public byte[] Q { get; set; }
         public byte[] Signature { get; set; }
 
         protected override void OnGetPacket(SshDataWorker writer)
         {
             writer.WriteBinary(HostKey);
-            writer.WriteMpint(F);
+            writer.WriteBinary(Q);
             writer.WriteBinary(Signature);
         }
     }

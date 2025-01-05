@@ -14,6 +14,18 @@ namespace FxSsh
             return rsa.ExportPkcs8PrivateKeyPem();
         }
 
+        public static string GenerateECDsaKeyPem(string curveName)
+        {
+            Contract.Requires(curveName == "nistp256" || curveName == "nistp384" || curveName == "nistp521");
+
+            var curve = default(ECCurve);
+            if (curveName == "nistp256") curve = ECCurve.NamedCurves.nistP256;
+            else if (curveName == "nistp384") curve = ECCurve.NamedCurves.nistP384;
+            else if (curveName == "nistp521") curve = ECCurve.NamedCurves.nistP521;
+            var ecdsa = ECDsa.Create(curve);
+            return ecdsa.ExportPkcs8PrivateKeyPem();
+        }
+
         public static string ConvertRsaBase64KeyToPem(string oldBase64Key)
         {
             Contract.Requires(oldBase64Key != null);

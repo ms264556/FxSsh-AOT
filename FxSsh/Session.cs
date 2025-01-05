@@ -63,10 +63,16 @@ namespace FxSsh
 
         static Session()
         {
+            _keyExchangeAlgorithms.Add("ecdh-sha2-nistp256", () => new EcdhKex("nistp256"));
+            _keyExchangeAlgorithms.Add("ecdh-sha2-nistp384", () => new EcdhKex("nistp384"));
+            _keyExchangeAlgorithms.Add("ecdh-sha2-nistp521", () => new EcdhKex("nistp521"));
             _keyExchangeAlgorithms.Add("diffie-hellman-group18-sha512", () => new DiffieHellmanKex(512, 8192));
             _keyExchangeAlgorithms.Add("diffie-hellman-group16-sha512", () => new DiffieHellmanKex(512, 4096));
             _keyExchangeAlgorithms.Add("diffie-hellman-group14-sha256", () => new DiffieHellmanKex(256, 2048));
 
+            _publicKeyAlgorithms.Add("ecdsa-sha2-nistp256", x => new EcdsaKey("nistp256", x));
+            _publicKeyAlgorithms.Add("ecdsa-sha2-nistp384", x => new EcdsaKey("nistp384", x));
+            _publicKeyAlgorithms.Add("ecdsa-sha2-nistp521", x => new EcdsaKey("nistp521", x));
             _publicKeyAlgorithms.Add("rsa-sha2-256", x => new RsaKey(256, x));
             _publicKeyAlgorithms.Add("rsa-sha2-512", x => new RsaKey(512, x));
 
@@ -529,6 +535,25 @@ namespace FxSsh
             _exchangeContext.ClientKexInitPayload = message.GetPacket();
         }
 
+        private void HandleMessage(KeyExchangeXInitMessage message)
+        {
+            switch (_exchangeContext.PublicKey)
+            {
+                case "rsa-sha2-256":
+                case "rsa-sha2-512":
+                    message = Message.LoadFrom<KeyExchangeDhInitMessage>(message);
+                    break;
+                case "ecdsa-sha2-nistp256":
+                case "ecdsa-sha2-nistp384":
+                case "ecdsa-sha2-nistp521":
+                    message = Message.LoadFrom<KeyExchangeECDhInitMessage>(message);
+                    break;
+                default:
+                    throw new InvalidOperationException();
+            }
+            HandleMessageCore(message);
+        }
+
         private void HandleMessage(KeyExchangeDhInitMessage message)
         {
             var kexAlg = _keyExchangeAlgorithms[_exchangeContext.KeyExchange]();
@@ -542,34 +567,48 @@ namespace FxSsh
             var serverExchangeValue = kexAlg.CreateKeyExchange();
             var sharedSecret = kexAlg.DecryptKeyExchange(clientExchangeValue);
             var hostKeyAndCerts = hostKeyAlg.CreateKeyAndCertificatesData();
-            var exchangeHash = ComputeExchangeHash(kexAlg, hostKeyAndCerts, clientExchangeValue, serverExchangeValue, sharedSecret);
+            var exchangeHash = ComputeExchangeHash(kexAlg, hostKeyAndCerts, clientExchangeValue, serverExchangeValue, sharedSecret, false);
 
             if (SessionId == null)
                 SessionId = exchangeHash;
 
-            var clientCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.BlockSize >> 3, sharedSecret, 'A');
-            var serverCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.BlockSize >> 3, sharedSecret, 'B');
-            var clientCipherKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.KeySize >> 3, sharedSecret, 'C');
-            var serverCipherKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.KeySize >> 3, sharedSecret, 'D');
-            var clientHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientHmac.KeySize >> 3, sharedSecret, 'E');
-            var serverHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverHmac.KeySize >> 3, sharedSecret, 'F');
-
-            _exchangeContext.NewAlgorithms = new Algorithms
-            {
-                KeyExchange = kexAlg,
-                PublicKey = hostKeyAlg,
-                ClientEncryption = clientCipher.Cipher(clientCipherKey, clientCipherIV, false),
-                ServerEncryption = serverCipher.Cipher(serverCipherKey, serverCipherIV, true),
-                ClientHmac = clientHmac.Hmac(clientHmacKey),
-                ServerHmac = serverHmac.Hmac(serverHmacKey),
-                ClientCompression = _compressionAlgorithms[_exchangeContext.ClientCompression](),
-                ServerCompression = _compressionAlgorithms[_exchangeContext.ServerCompression](),
-            };
+            _exchangeContext.NewAlgorithms = ComputeEncryption(kexAlg, hostKeyAlg, exchangeHash, clientCipher, serverCipher, clientHmac, serverHmac, sharedSecret);
 
             var reply = new KeyExchangeDhReplyMessage
             {
                 HostKey = hostKeyAndCerts,
                 F = serverExchangeValue,
+                Signature = hostKeyAlg.CreateSignatureData(exchangeHash),
+            };
+
+            SendMessage(reply);
+            SendMessage(new NewKeysMessage());
+        }
+
+        private void HandleMessage(KeyExchangeECDhInitMessage message)
+        {
+            var kexAlg = _keyExchangeAlgorithms[_exchangeContext.KeyExchange]();
+            var hostKeyAlg = _publicKeyAlgorithms[_exchangeContext.PublicKey](_hostKey[_exchangeContext.PublicKey]);
+            var clientCipher = _encryptionAlgorithms[_exchangeContext.ClientEncryption]();
+            var serverCipher = _encryptionAlgorithms[_exchangeContext.ServerEncryption]();
+            var serverHmac = _hmacAlgorithms[_exchangeContext.ServerHmac]();
+            var clientHmac = _hmacAlgorithms[_exchangeContext.ClientHmac]();
+
+            var clientExchangeValue = message.Q;
+            var serverExchangeValue = kexAlg.CreateKeyExchange();
+            var sharedSecret = kexAlg.DecryptKeyExchange(clientExchangeValue);
+            var hostKeyAndCerts = hostKeyAlg.CreateKeyAndCertificatesData();
+            var exchangeHash = ComputeExchangeHash(kexAlg, hostKeyAndCerts, clientExchangeValue, serverExchangeValue, sharedSecret, true);
+
+            if (SessionId == null)
+                SessionId = exchangeHash;
+
+            _exchangeContext.NewAlgorithms = ComputeEncryption(kexAlg, hostKeyAlg, exchangeHash, clientCipher, serverCipher, clientHmac, serverHmac, sharedSecret);
+
+            var reply = new KeyExchangeECDhReplyMessage
+            {
+                HostKey = hostKeyAndCerts,
+                Q = serverExchangeValue,
                 Signature = hostKeyAlg.CreateSignatureData(exchangeHash),
             };
 
@@ -635,7 +674,7 @@ namespace FxSsh
             throw new SshConnectionException("Failed to negotiate algorithm.", DisconnectReason.KeyExchangeFailed);
         }
 
-        private byte[] ComputeExchangeHash(KexAlgorithm kexAlg, byte[] hostKeyAndCerts, byte[] clientExchangeValue, byte[] serverExchangeValue, byte[] sharedSecret)
+        private byte[] ComputeExchangeHash(KexAlgorithm kexAlg, byte[] hostKeyAndCerts, byte[] clientExchangeValue, byte[] serverExchangeValue, byte[] sharedSecret, bool isEcdh)
         {
             using (var worker = new SshDataWorker())
             {
@@ -644,12 +683,44 @@ namespace FxSsh
                 worker.WriteBinary(_exchangeContext.ClientKexInitPayload);
                 worker.WriteBinary(_exchangeContext.ServerKexInitPayload);
                 worker.WriteBinary(hostKeyAndCerts);
-                worker.WriteMpint(clientExchangeValue);
-                worker.WriteMpint(serverExchangeValue);
+                if (isEcdh)
+                {
+                    worker.WriteBinary(clientExchangeValue);
+                    worker.WriteBinary(serverExchangeValue);
+                }
+                else
+                {
+                    worker.WriteMpint(clientExchangeValue);
+                    worker.WriteMpint(serverExchangeValue);
+                }
                 worker.WriteMpint(sharedSecret);
 
                 return kexAlg.ComputeHash(worker.ToByteArray());
             }
+        }
+
+        private Algorithms ComputeEncryption(KexAlgorithm kexAlg, PublicKeyAlgorithm hostKeyAlg, byte[] exchangeHash, CipherInfo clientCipher, CipherInfo serverCipher, HmacInfo clientHmac, HmacInfo serverHmac, byte[] sharedSecret)
+        {
+            var clientCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.BlockSize >> 3, sharedSecret, 'A');
+            var serverCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.BlockSize >> 3, sharedSecret, 'B');
+            var clientCipherKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.KeySize >> 3, sharedSecret, 'C');
+            var serverCipherKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.KeySize >> 3, sharedSecret, 'D');
+            var clientHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientHmac.KeySize >> 3, sharedSecret, 'E');
+            var serverHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverHmac.KeySize >> 3, sharedSecret, 'F');
+
+            var algorithms = new Algorithms
+            {
+                KeyExchange = kexAlg,
+                PublicKey = hostKeyAlg,
+                ClientEncryption = clientCipher.Cipher(clientCipherKey, clientCipherIV, false),
+                ServerEncryption = serverCipher.Cipher(serverCipherKey, serverCipherIV, true),
+                ClientHmac = clientHmac.Hmac(clientHmacKey),
+                ServerHmac = serverHmac.Hmac(serverHmacKey),
+                ClientCompression = _compressionAlgorithms[_exchangeContext.ClientCompression](),
+                ServerCompression = _compressionAlgorithms[_exchangeContext.ServerCompression](),
+            };
+
+            return algorithms;
         }
 
         private byte[] ComputeEncryptionKey(KexAlgorithm kexAlg, byte[] exchangeHash, int blockSize, byte[] sharedSecret, char letter)

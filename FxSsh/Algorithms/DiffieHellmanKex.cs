@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Diagnostics.Contracts;
 using System.Globalization;
-using System.Linq;
 using System.Numerics;
 using System.Security.Cryptography;
 
@@ -70,7 +69,7 @@ namespace FxSsh.Algorithms
         public override byte[] CreateKeyExchange()
         {
             var y = BigInteger.ModPow(_g, _x, _p);
-            var bytes = BigintToBytes(y);
+            var bytes = y.ToByteArray(isUnsigned: false, isBigEndian: true);
             return bytes;
         }
 
@@ -78,25 +77,10 @@ namespace FxSsh.Algorithms
         {
             Contract.Requires(keyEx != null);
 
-            var pvr = BytesToBigint(keyEx);
+            var pvr = new BigInteger(keyEx, isUnsigned: true, isBigEndian: true);
             var z = BigInteger.ModPow(pvr, _x, _p);
-            var bytes = BigintToBytes(z);
+            var bytes = z.ToByteArray(isUnsigned: false, isBigEndian: true);
             return bytes;
-        }
-
-        private BigInteger BytesToBigint(byte[] bytes)
-        {
-            return new BigInteger(bytes.Reverse().Concat(new byte[] { 0 }).ToArray());
-        }
-
-        private byte[] BigintToBytes(BigInteger bigint)
-        {
-            var bytes = bigint.ToByteArray();
-            if (bytes.Length > 1 && bytes[bytes.Length - 1] == 0)
-            {
-                return bytes.Reverse().Skip(1).ToArray();
-            }
-            return bytes.Reverse().ToArray();
         }
     }
 }
