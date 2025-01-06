@@ -21,6 +21,29 @@ FxSsh adheres to the following RFC documents
 - [RFC6668](https://tools.ietf.org/html/rfc6668)  SHA-2 Data Integrity Algorithms
 - [RFC8332](https://tools.ietf.org/html/rfc8332)  Use of RSA Keys with SHA-2
 
+### Supported Algorithms
+
+| **Category**          | **Algorithms**                                                                |
+|-----------------------|-------------------------------------------------------------------------------|
+| **Public Key**        | RSA family: `rsa-sha2-256`, `rsa-sha2-512`<br>ECDsa family: `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521` |
+| **Key Exchange (KEX)**| DH family: `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group18-sha512`<br>ECDH family: `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521` |
+| **Encryption**        | `aes128-ctr`, `aes192-ctr`, `aes256-ctr`                                      |
+| **MAC**               | `hmac-sha2-256`, `hmac-sha2-512`                                              |
+
+### Supported Services
+
+| **Service**        | **Details**                                                             |
+|--------------------|-------------------------------------------------------------------------|
+| **Authentication** | `publickey`, `password`                                                 |
+| **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`      |
+
+### Tested Clients
+
+| **Client**      | **Version**                                     |
+|-----------------|-------------------------------------------------|
+| OpenSSH         | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`     |
+| PuTTY           | `Release 0.82`                                  |
+
 ### Sample code
 ```cs
 static int windowWidth, windowHeight;
@@ -215,6 +238,8 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
 ### Generate private key
 ```cs
 KeyGenerator.GenerateRsaKeyPem(2048); \\ generate rsa key with 2048 bits
+KeyGenerator.GenerateECDsaKeyPem("nistp256"); \\ generate ecdsa key with curve nistp256
+KeyGenerator.ConvertRsaBase64KeyToPem("base64"); \\ convert old rsa base64 key to pem format
 ```
 
 ---
