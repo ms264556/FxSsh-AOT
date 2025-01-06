@@ -1,5 +1,4 @@
-﻿using System;
-using System.Text;
+﻿using System.Text;
 
 namespace FxSsh.Messages
 {
@@ -12,7 +11,7 @@ namespace FxSsh.Messages
 
         public override byte MessageType { get { return MessageNumber; } }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             ServiceName = reader.ReadString(Encoding.ASCII);
         }

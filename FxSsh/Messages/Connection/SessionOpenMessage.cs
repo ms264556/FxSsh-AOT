@@ -4,7 +4,7 @@ namespace FxSsh.Messages.Connection
 {
     public class SessionOpenMessage : ChannelOpenMessage
     {
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             base.OnLoad(reader);
 

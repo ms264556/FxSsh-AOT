@@ -324,11 +324,11 @@ namespace FxSsh
             var bytesToRead = packetLength - blockSize + 4;
 
             var followingBlocks = SocketRead(bytesToRead);
-            if (useAlg)
+            if (useAlg && followingBlocks.Length > 0)
                 followingBlocks = _algorithms.ClientEncryption.Transform(followingBlocks);
 
-            var fullPacket = firstBlock.Concat(followingBlocks).ToArray();
-            var data = fullPacket.Skip(5).Take(packetLength - paddingLength).ToArray();
+            var fullPacket = new ReadOnlyMemory<byte>([.. firstBlock, .. followingBlocks]);
+            var data = fullPacket[5..(packetLength - paddingLength + 5)];
             if (useAlg)
             {
                 var clientMac = SocketRead(_algorithms.ClientHmac.DigestLength);
@@ -341,7 +341,7 @@ namespace FxSsh
                 data = _algorithms.ClientCompression.Decompress(data);
             }
 
-            var typeNumber = data[0];
+            var typeNumber = data.Span[0];
             var implemented = _messagesMetadata.ContainsKey(typeNumber);
             var message = implemented
                 ? (Message)Activator.CreateInstance(_messagesMetadata[typeNumber])
@@ -400,15 +400,12 @@ namespace FxSsh
             var padding = new byte[paddingLength];
             RandomNumberGenerator.Fill(padding);
 
-            using (var worker = new SshDataWorker())
-            {
-                worker.Write(packetLength);
-                worker.Write(paddingLength);
-                worker.Write(payload);
-                worker.Write(padding);
-
-                payload = worker.ToByteArray();
-            }
+            payload = new SshDataWriter(5 + payload.Length + padding.Length)
+                .Write(packetLength)
+                .Write(paddingLength)
+                .WriteBytes(payload)
+                .WriteBytes(padding)
+                .ToByteArray();
 
             if (useAlg)
             {
@@ -676,27 +673,24 @@ namespace FxSsh
 
         private byte[] ComputeExchangeHash(KexAlgorithm kexAlg, byte[] hostKeyAndCerts, byte[] clientExchangeValue, byte[] serverExchangeValue, byte[] sharedSecret, bool isEcdh)
         {
-            using (var worker = new SshDataWorker())
+            var writer = new SshDataWriter(32 + ClientVersion.Length + ServerVersion.Length + _exchangeContext.ClientKexInitPayload.Length + _exchangeContext.ServerKexInitPayload.Length + hostKeyAndCerts.Length + clientExchangeValue.Length + serverExchangeValue.Length + sharedSecret.Length)
+                .Write(ClientVersion, Encoding.ASCII)
+                .Write(ServerVersion, Encoding.ASCII)
+                .WriteBinary(_exchangeContext.ClientKexInitPayload)
+                .WriteBinary(_exchangeContext.ServerKexInitPayload)
+                .WriteBinary(hostKeyAndCerts);
+            if (isEcdh)
             {
-                worker.Write(ClientVersion, Encoding.ASCII);
-                worker.Write(ServerVersion, Encoding.ASCII);
-                worker.WriteBinary(_exchangeContext.ClientKexInitPayload);
-                worker.WriteBinary(_exchangeContext.ServerKexInitPayload);
-                worker.WriteBinary(hostKeyAndCerts);
-                if (isEcdh)
-                {
-                    worker.WriteBinary(clientExchangeValue);
-                    worker.WriteBinary(serverExchangeValue);
-                }
-                else
-                {
-                    worker.WriteMpint(clientExchangeValue);
-                    worker.WriteMpint(serverExchangeValue);
-                }
-                worker.WriteMpint(sharedSecret);
-
-                return kexAlg.ComputeHash(worker.ToByteArray());
+                writer.WriteBinary(clientExchangeValue);
+                writer.WriteBinary(serverExchangeValue);
             }
+            else
+            {
+                writer.WriteMpint(clientExchangeValue);
+                writer.WriteMpint(serverExchangeValue);
+            }
+            writer.WriteMpint(sharedSecret);
+            return kexAlg.ComputeHash(writer.ToByteArray());
         }
 
         private Algorithms ComputeEncryption(KexAlgorithm kexAlg, PublicKeyAlgorithm hostKeyAlg, byte[] exchangeHash, CipherInfo clientCipher, CipherInfo serverCipher, HmacInfo clientHmac, HmacInfo serverHmac, byte[] sharedSecret)
@@ -732,23 +726,21 @@ namespace FxSsh
 
             while (keyBufferIndex < blockSize)
             {
-                using (var worker = new SshDataWorker())
+                var writer = new SshDataWriter()
+                    .WriteMpint(sharedSecret)
+                    .WriteBytes(exchangeHash);
+
+                if (currentHash == null)
                 {
-                    worker.WriteMpint(sharedSecret);
-                    worker.Write(exchangeHash);
-
-                    if (currentHash == null)
-                    {
-                        worker.Write((byte)letter);
-                        worker.Write(SessionId);
-                    }
-                    else
-                    {
-                        worker.Write(currentHash);
-                    }
-
-                    currentHash = kexAlg.ComputeHash(worker.ToByteArray());
+                    writer.Write((byte)letter);
+                    writer.WriteBytes(SessionId);
                 }
+                else
+                {
+                    writer.WriteBytes(currentHash);
+                }
+
+                currentHash = kexAlg.ComputeHash(writer.ToByteArray());
 
                 currentHashLength = Math.Min(currentHash.Length, blockSize - keyBufferIndex);
                 Array.Copy(currentHash, 0, keyBuffer, keyBufferIndex, currentHashLength);
@@ -759,15 +751,14 @@ namespace FxSsh
             return keyBuffer;
         }
 
-        private byte[] ComputeHmac(HmacAlgorithm alg, byte[] payload, uint seq)
+        private byte[] ComputeHmac(HmacAlgorithm alg, ReadOnlyMemory<byte> payload, uint seq)
         {
-            using (var worker = new SshDataWorker())
-            {
-                worker.Write(seq);
-                worker.Write(payload);
+            var bytes = new SshDataWriter(4 + payload.Length)
+                .Write(seq)
+                .WriteBytes(payload)
+                .ToByteArray();
 
-                return alg.ComputeHash(worker.ToByteArray());
-            }
+            return alg.ComputeHash(bytes);
         }
 
         internal SshService RegisterService(string serviceName, UserauthArgs auth = null)

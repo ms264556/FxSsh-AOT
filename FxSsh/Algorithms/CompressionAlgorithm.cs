@@ -1,12 +1,11 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Algorithms
 {
-    [ContractClass(typeof(CompressionAlgorithmContract))]
     public abstract class CompressionAlgorithm
     {
         public abstract byte[] Compress(byte[] input);
 
-        public abstract byte[] Decompress(byte[] input);
+        public abstract ReadOnlyMemory<byte> Decompress(ReadOnlyMemory<byte> input);
     }
 }

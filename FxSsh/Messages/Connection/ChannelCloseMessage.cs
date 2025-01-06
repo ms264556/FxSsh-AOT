@@ -10,12 +10,12 @@ namespace FxSsh.Messages.Connection
 
         public override byte MessageType { get { return MessageNumber; } }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             RecipientChannel = reader.ReadUInt32();
         }
 
-        protected override void OnGetPacket(SshDataWorker writer)
+        protected override void OnGetPacket(SshDataWriter writer)
         {
             writer.Write(RecipientChannel);
         }

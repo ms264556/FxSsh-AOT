@@ -1,6 +1,4 @@
-﻿using System;
-
-namespace FxSsh.Messages
+﻿namespace FxSsh.Messages
 {
     public class KeyExchangeDhReplyMessage : KeyExchangeXReplyMessage
     {
@@ -8,7 +6,7 @@ namespace FxSsh.Messages
         public byte[] F { get; set; }
         public byte[] Signature { get; set; }
 
-        protected override void OnGetPacket(SshDataWorker writer)
+        protected override void OnGetPacket(SshDataWriter writer)
         {
             writer.WriteBinary(HostKey);
             writer.WriteMpint(F);

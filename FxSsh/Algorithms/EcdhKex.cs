@@ -33,31 +33,24 @@ namespace FxSsh.Algorithms
         public override byte[] CreateKeyExchange()
         {
             var q = _ecdh.PublicKey.ExportParameters().Q;
-            using (var worker = new SshDataWorker())
-            {
-                worker.Write(0x04);
-                worker.Write(q.X);
-                worker.Write(q.Y);
-
-                return worker.ToByteArray();
-            }
+            return new SshDataWriter(1 + q.X.Length + q.Y.Length)
+                .Write(0x04)
+                .WriteBytes(q.X)
+                .WriteBytes(q.Y)
+                .ToByteArray();
         }
 
         public override byte[] DecryptKeyExchange(byte[] exchangeData)
         {
             Contract.Requires(exchangeData != null);
 
+            var reader = new SshDataReader(exchangeData);
+            if (reader.ReadByte() != 0x04)
+                throw new InvalidDataException();
+            var qlength = (exchangeData.Length - 1) / 2;
             var args = new ECParameters();
             args.Curve = _ecdh.PublicKey.ExportParameters().Curve;
-            using (var worker = new SshDataWorker(exchangeData))
-            {
-                if (worker.ReadByte() != 0x04)
-                    throw new InvalidDataException();
-                var qlength = (exchangeData.Length - 1) / 2;
-                var x = worker.ReadBinary(qlength);
-                var y = worker.ReadBinary(qlength);
-                args.Q = new ECPoint { X = x, Y = y };
-            }
+            args.Q = new ECPoint { X = reader.ReadBytes(qlength), Y = reader.ReadBytes(qlength) };
 
             var clientPublicKey = ECDiffieHellman.Create(args).PublicKey;
             var agreement = _ecdh.DeriveRawSecretAgreement(clientPublicKey);

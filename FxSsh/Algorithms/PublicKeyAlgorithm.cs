@@ -26,33 +26,24 @@ namespace FxSsh.Algorithms
             }
         }
 
-        public byte[] GetSignature(byte[] signatureData)
+        public byte[] GetSignature(ReadOnlyMemory<byte> signatureData)
         {
-            Contract.Requires(signatureData != null);
+            var reader = new SshDataReader(signatureData);
+            if (reader.ReadString(Encoding.ASCII) != this.Name)
+                throw new CryptographicException("Signature was not created with this algorithm.");
 
-            using (var worker = new SshDataWorker(signatureData))
-            {
-                if (worker.ReadString(Encoding.ASCII) != this.Name)
-                    throw new CryptographicException("Signature was not created with this algorithm.");
-
-                var signature = worker.ReadBinary();
-                return signature;
-            }
+            var signature = reader.ReadBinary();
+            return signature;
         }
 
         public byte[] CreateSignatureData(byte[] data)
         {
             Contract.Requires(data != null);
 
-            using (var worker = new SshDataWorker())
-            {
-                var signature = SignData(data);
-
-                worker.Write(this.Name, Encoding.ASCII);
-                worker.WriteBinary(signature);
-
-                return worker.ToByteArray();
-            }
+            return new SshDataWriter()
+                .Write(this.Name, Encoding.ASCII)
+                .WriteBinary(SignData(data))
+                .ToByteArray();
         }
 
         public abstract void ImportKey(string key);

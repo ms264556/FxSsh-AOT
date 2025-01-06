@@ -1,5 +1,4 @@
-﻿using System;
-using System.Diagnostics.Contracts;
+﻿using System.Diagnostics.Contracts;
 using System.Text;
 
 namespace FxSsh.Messages
@@ -29,7 +28,7 @@ namespace FxSsh.Messages
 
         public override byte MessageType { get { return MessageNumber; } }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             ReasonCode = (DisconnectReason)reader.ReadUInt32();
             Description = reader.ReadString(Encoding.UTF8);
@@ -37,7 +36,7 @@ namespace FxSsh.Messages
                 Language = reader.ReadString(Encoding.UTF8);
         }
 
-        protected override void OnGetPacket(SshDataWorker writer)
+        protected override void OnGetPacket(SshDataWriter writer)
         {
             writer.Write((uint)ReasonCode);
             writer.Write(Description, Encoding.UTF8);

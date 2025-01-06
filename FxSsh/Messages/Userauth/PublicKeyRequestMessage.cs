@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Linq;
 using System.Text;
 
 namespace FxSsh.Messages.Userauth
@@ -9,11 +8,11 @@ namespace FxSsh.Messages.Userauth
         public bool HasSignature { get; private set; }
         public string KeyAlgorithmName { get; private set; }
         public byte[] PublicKey { get; private set; }
-        public byte[] Signature { get; private set; }
+        public ReadOnlyMemory<byte> Signature { get; private set; }
 
-        public byte[] PayloadWithoutSignature { get; private set; }
+        public ReadOnlyMemory<byte> PayloadWithoutSignature { get; private set; }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             base.OnLoad(reader);
 
@@ -26,8 +25,8 @@ namespace FxSsh.Messages.Userauth
 
             if (HasSignature)
             {
-                Signature = reader.ReadBinary();
-                PayloadWithoutSignature = RawBytes.Take(RawBytes.Length - Signature.Length - 5).ToArray();
+                Signature = reader.ReadBinaryAsMemory();
+                PayloadWithoutSignature = RawBytes[..(RawBytes.Length - Signature.Length - 5)];
             }
         }
     }

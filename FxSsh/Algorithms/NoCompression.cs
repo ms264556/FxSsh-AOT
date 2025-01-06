@@ -1,4 +1,5 @@
-﻿
+﻿using System;
+
 namespace FxSsh.Algorithms
 {
     public class NoCompression : CompressionAlgorithm
@@ -8,7 +9,7 @@ namespace FxSsh.Algorithms
             return input;
         }
 
-        public override byte[] Decompress(byte[] input)
+        public override ReadOnlyMemory<byte> Decompress(ReadOnlyMemory<byte> input)
         {
             return input;
         }

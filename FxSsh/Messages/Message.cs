@@ -7,33 +7,28 @@ namespace FxSsh.Messages
     {
         public abstract byte MessageType { get; }
 
-        protected byte[] RawBytes { get; set; }
+        protected ReadOnlyMemory<byte> RawBytes { get; set; }
 
-        public void Load(byte[] bytes)
+        public void Load(ReadOnlyMemory<byte> bytes)
         {
-            Contract.Requires(bytes != null);
-
             RawBytes = bytes;
-            using (var worker = new SshDataWorker(bytes))
-            {
-                var number = worker.ReadByte();
-                if (number != MessageType)
-                    throw new ArgumentException(string.Format("Message type {0} is not valid.", number));
 
-                OnLoad(worker);
-            }
+            var reader = new SshDataReader(bytes);
+            var number = reader.ReadByte();
+            if (number != MessageType)
+                throw new ArgumentException(string.Format("Message type {0} is not valid.", number));
+
+            OnLoad(reader);
         }
 
         public byte[] GetPacket()
         {
-            using (var worker = new SshDataWorker())
-            {
-                worker.Write(MessageType);
+            var writer = new SshDataWriter();
+            writer.Write(MessageType);
 
-                OnGetPacket(worker);
+            OnGetPacket(writer);
 
-                return worker.ToByteArray();
-            }
+            return writer.ToByteArray();
         }
 
         public static T LoadFrom<T>(Message message) where T : Message, new()
@@ -45,14 +40,14 @@ namespace FxSsh.Messages
             return msg;
         }
 
-        protected virtual void OnLoad(SshDataWorker reader)
+        protected virtual void OnLoad(SshDataReader reader)
         {
             Contract.Requires(reader != null);
 
             throw new NotSupportedException();
         }
 
-        protected virtual void OnGetPacket(SshDataWorker writer)
+        protected virtual void OnGetPacket(SshDataWriter writer)
         {
             Contract.Requires(writer != null);
 

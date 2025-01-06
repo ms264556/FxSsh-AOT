@@ -6,7 +6,7 @@ namespace FxSsh.Messages.Connection
     {
         public string Command { get; private set; }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             base.OnLoad(reader);
 

@@ -5,7 +5,7 @@ namespace FxSsh.Messages.Connection
     {
         public uint ExitStatus { get; set; }
 
-        protected override void OnGetPacket(SshDataWorker writer)
+        protected override void OnGetPacket(SshDataWriter writer)
         {
             RequestType = "exit-status";
             WantReply = false;

@@ -100,13 +100,12 @@ namespace FxSsh.Services
 
                 var sig = keyAlg.GetSignature(message.Signature);
 
-                using (var worker = new SshDataWorker())
-                {
-                    worker.WriteBinary(_session.SessionId);
-                    worker.Write(message.PayloadWithoutSignature);
+                var bytes = new SshDataWriter(4 + _session.SessionId.Length + message.PayloadWithoutSignature.Length)
+                    .WriteBinary(_session.SessionId)
+                    .WriteBytes(message.PayloadWithoutSignature)
+                    .ToByteArray();
 
-                    verifed = keyAlg.VerifyData(worker.ToByteArray(), sig);
-                }
+                verifed = keyAlg.VerifyData(bytes, sig);
 
                 if (!verifed)
                 {

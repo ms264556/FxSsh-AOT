@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Linq;
 using System.Text;
 
 namespace FxSsh.Messages.Userauth
@@ -8,7 +7,7 @@ namespace FxSsh.Messages.Userauth
     {
         public string Password { get; private set; }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             base.OnLoad(reader);
 

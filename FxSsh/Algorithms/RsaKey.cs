@@ -53,33 +53,27 @@ namespace FxSsh.Algorithms
 
         public override void LoadKeyAndCertificatesData(byte[] data)
         {
-            using (var worker = new SshDataWorker(data))
+            var reader = new SshDataReader(data);
+            if (reader.ReadString(Encoding.ASCII) != PublicKeyName)
+                throw new CryptographicException("Key and certificates were not created with this algorithm.");
+
+            var args = new RSAParameters
             {
-                if (worker.ReadString(Encoding.ASCII) != PublicKeyName)
-                    throw new CryptographicException("Key and certificates were not created with this algorithm.");
+                Exponent = reader.ReadMpint(),
+                Modulus = reader.ReadMpint(),
+            };
 
-                var args = new RSAParameters
-                {
-                    Exponent = worker.ReadMpint(),
-                    Modulus = worker.ReadMpint(),
-                };
-
-                _algorithm.ImportParameters(args);
-            }
+            _algorithm.ImportParameters(args);
         }
 
         public override byte[] CreateKeyAndCertificatesData()
         {
-            using (var worker = new SshDataWorker())
-            {
-                var args = _algorithm.ExportParameters(false);
-
-                worker.Write(PublicKeyName, Encoding.ASCII);
-                worker.WriteMpint(args.Exponent);
-                worker.WriteMpint(args.Modulus);
-
-                return worker.ToByteArray();
-            }
+            var args = _algorithm.ExportParameters(false);
+            return new SshDataWriter(8 + PublicKeyName.Length + args.Exponent.Length + args.Modulus.Length)
+                .Write(PublicKeyName, Encoding.ASCII)
+                .WriteMpint(args.Exponent)
+                .WriteMpint(args.Modulus)
+                .ToByteArray();
         }
 
         public override bool VerifyData(byte[] data, byte[] signature)

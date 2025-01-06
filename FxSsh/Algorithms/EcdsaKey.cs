@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Diagnostics.Contracts;
-using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -53,46 +52,36 @@ namespace FxSsh.Algorithms
 
         public override void LoadKeyAndCertificatesData(byte[] data)
         {
-            using (var worker = new SshDataWorker(data))
-            {
-                if (worker.ReadString(Encoding.ASCII) != this.Name
-                    || worker.ReadString(Encoding.ASCII) != _curveName)
-                    throw new CryptographicException("Key and certificates were not created with this algorithm.");
+            var reader = new SshDataReader(data);
+            if (reader.ReadString(Encoding.ASCII) != this.Name
+                || reader.ReadString(Encoding.ASCII) != _curveName)
+                throw new CryptographicException("Key and certificates were not created with this algorithm.");
 
-                var bytesQ = worker.ReadBinary();
-                using (var worker2 = new SshDataWorker(bytesQ))
-                {
-                    if (worker2.ReadByte() != 0x04)
-                        throw new CryptographicException("Curve point compression is not supported.");
-                    var fieldSize = bytesQ.Length / 2;
-                    var args = _algorithm.ExportParameters(false);
-                    args.Q.X = worker2.ReadBinary(fieldSize);
-                    args.Q.Y = worker2.ReadBinary(fieldSize);
+            var bytesQ = reader.ReadBinaryAsMemory();
+            var readerQ = new SshDataReader(bytesQ);
+            if (readerQ.ReadByte() != 0x04)
+                throw new CryptographicException("Curve point compression is not supported.");
+            var fieldSize = bytesQ.Length / 2;
+            var args = _algorithm.ExportParameters(false);
+            args.Q.X = readerQ.ReadBytes(fieldSize);
+            args.Q.Y = readerQ.ReadBytes(fieldSize);
 
-                    _algorithm.ImportParameters(args);
-                }
-            }
+            _algorithm.ImportParameters(args);
         }
 
         public override byte[] CreateKeyAndCertificatesData()
         {
-            using (var worker = new SshDataWorker())
-            {
-                var args = _algorithm.ExportParameters(false);
-
-                worker.Write(this.Name, Encoding.ASCII);
-                worker.Write(_curveName, Encoding.ASCII);
-                using (var worker2 = new SshDataWorker())
-                {
-                    worker2.Write(0x04);
-                    worker2.Write(args.Q.X);
-                    worker2.Write(args.Q.Y);
-
-                    worker.WriteBinary(worker2.ToByteArray());
-                }
-
-                return worker.ToByteArray();
-            }
+            var args = _algorithm.ExportParameters(false);
+            var bytesQ = new SshDataWriter(1 + args.Q.X.Length + args.Q.Y.Length)
+                .Write(0x04)
+                .WriteBytes(args.Q.X)
+                .WriteBytes(args.Q.Y)
+                .ToByteArray();
+            return new SshDataWriter(12 + this.Name.Length + _curveName.Length + bytesQ.Length)
+                .Write(this.Name, Encoding.ASCII)
+                .Write(_curveName, Encoding.ASCII)
+                .WriteBinary(bytesQ)
+                .ToByteArray();
         }
 
         public override bool VerifyData(byte[] data, byte[] signature)
@@ -109,21 +98,19 @@ namespace FxSsh.Algorithms
 
         private byte[] SignatureBlobToP1363(byte[] signatureBlob)
         {
-            using (var worker = new SshDataWorker(signatureBlob))
-            {
-                var r = worker.ReadMpint();
-                var s = worker.ReadMpint();
-                var fieldSize = (_algorithm.KeySize + 7) >> 3;
-                // equal to (int)Math.Ceiling((double)_algorithm.KeySize / 8);
-                //_algorithm.KeySize == 256 ? 32 :
-                //_algorithm.KeySize == 384 ? 48 :
-                //_algorithm.KeySize == 521 ? 66 :
-                //throw new InvalidDataException();
-                var bytes = new byte[fieldSize * 2];
-                Array.Copy(r, 0, bytes, fieldSize - r.Length, r.Length);
-                Array.Copy(s, 0, bytes, fieldSize + fieldSize - s.Length, s.Length);
-                return bytes;
-            }
+            var reader = new SshDataReader(signatureBlob);
+            var r = reader.ReadMpint();
+            var s = reader.ReadMpint();
+            var fieldSize = (_algorithm.KeySize + 7) >> 3;
+            // equal to (int)Math.Ceiling((double)_algorithm.KeySize / 8);
+            //_algorithm.KeySize == 256 ? 32 :
+            //_algorithm.KeySize == 384 ? 48 :
+            //_algorithm.KeySize == 521 ? 66 :
+            //throw new InvalidDataException();
+            var bytes = new byte[fieldSize * 2];
+            Array.Copy(r, 0, bytes, fieldSize - r.Length, r.Length);
+            Array.Copy(s, 0, bytes, fieldSize + fieldSize - s.Length, s.Length);
+            return bytes;
         }
 
         public override byte[] SignData(byte[] data)
@@ -138,17 +125,14 @@ namespace FxSsh.Algorithms
             return P1363ToSignatureBlob(sig);
         }
 
-        private byte[] P1363ToSignatureBlob(byte[] sig)
+        private byte[] P1363ToSignatureBlob(byte[] p1363Bytes)
         {
-            var fieldSize = sig.Length / 2;
-            var r = sig.Take(fieldSize).ToArray();
-            var s = sig.Skip(fieldSize).ToArray();
-            using (var worker = new SshDataWorker())
-            {
-                worker.WriteMpint(r);
-                worker.WriteMpint(s);
-                return worker.ToByteArray();
-            }
+            var fieldSize = p1363Bytes.Length / 2;
+            var bytes = p1363Bytes.AsMemory();
+            return new SshDataWriter(8 + p1363Bytes.Length)
+                .WriteMpint(bytes[..fieldSize])
+                .WriteMpint(bytes[fieldSize..])
+                .ToByteArray();
         }
     }
 }

@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Net;
 using System.Text;
 
 namespace FxSsh.Messages.Connection
@@ -11,7 +10,7 @@ namespace FxSsh.Messages.Connection
         public string OriginatorIPAddress { get; private set; }
         public uint OriginatorPort { get; private set; }
 
-        protected override void OnLoad(SshDataWorker reader)
+        protected override void OnLoad(SshDataReader reader)
         {
             base.OnLoad(reader);
 
