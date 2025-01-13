@@ -268,30 +268,42 @@ namespace FxSsh.Services
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
-            if (message.WantReply)
-                _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channel.ClientChannelId });
+            var args = new CommandRequestedArgs(channel, "shell", null, _auth);
+            CommandOpened?.Invoke(this, args);
 
-            CommandOpened?.Invoke(this, new CommandRequestedArgs(channel, "shell", null, _auth));
+            if (message.WantReply)
+                if (args.Agreed)
+                    _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channel.ClientChannelId });
+                else
+                    _session.SendMessage(new ChannelFailureMessage { RecipientChannel = channel.ClientChannelId });
         }
 
         private void HandleMessage(CommandRequestMessage message)
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
-            if (message.WantReply)
-                _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channel.ClientChannelId });
+            var args = new CommandRequestedArgs(channel, "exec", message.Command, _auth);
+            CommandOpened?.Invoke(this, args);
 
-            CommandOpened?.Invoke(this, new CommandRequestedArgs(channel, "exec", message.Command, _auth));
+            if (message.WantReply)
+                if (args.Agreed)
+                    _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channel.ClientChannelId });
+                else
+                    _session.SendMessage(new ChannelFailureMessage { RecipientChannel = channel.ClientChannelId });
         }
 
         private void HandleMessage(SubsystemRequestMessage message)
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
-            if (message.WantReply)
-                _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channel.ClientChannelId });
+            var args = new CommandRequestedArgs(channel, "subsystem", message.Name, _auth);
+            CommandOpened?.Invoke(this, args);
 
-            CommandOpened?.Invoke(this, new CommandRequestedArgs(channel, "subsystem", message.Name, _auth));
+            if (message.WantReply)
+                if (args.Agreed)
+                    _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channel.ClientChannelId });
+                else
+                    _session.SendMessage(new ChannelFailureMessage { RecipientChannel = channel.ClientChannelId });
         }
 
         private void HandleMessage(WindowChangeMessage message)

@@ -20,5 +20,6 @@ namespace FxSsh.Services
         public string ShellType { get; private set; }
         public string CommandText { get; private set; }
         public UserauthArgs AttachedUserauthArgs { get; private set; }
+        public bool Agreed { get; set; }
     }
 }

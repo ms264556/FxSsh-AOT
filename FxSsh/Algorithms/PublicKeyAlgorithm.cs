@@ -19,11 +19,8 @@ namespace FxSsh.Algorithms
 
         public string GetFingerprint()
         {
-            using (var md5 = MD5.Create())
-            {
-                var bytes = md5.ComputeHash(CreateKeyAndCertificatesData());
-                return BitConverter.ToString(bytes).Replace('-', ':');
-            }
+            var bytes = SHA256.HashData(CreateKeyAndCertificatesData());
+            return Convert.ToBase64String(bytes);
         }
 
         public byte[] GetSignature(ReadOnlyMemory<byte> signatureData)

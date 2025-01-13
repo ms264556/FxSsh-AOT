@@ -156,11 +156,11 @@ TA==
 
         static void service_CommandOpened(object sender, CommandRequestedArgs e)
         {
-            Console.WriteLine($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\".");
+            Console.WriteLine($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\", client key SHA256:{e.AttachedUserauthArgs.Fingerprint}.");
 
-            var allow = true;  // func(e.ShellType, e.CommandText, e.AttachedUserauthArgs);
+            e.Agreed = true;  // func(e.ShellType, e.CommandText, e.AttachedUserauthArgs);
 
-            if (!allow)
+            if (!e.Agreed)
                 return;
 
             if (e.ShellType == "shell")
@@ -194,7 +194,13 @@ TA==
             }
             else if (e.ShellType == "subsystem")
             {
-                // do something more
+                if (e.CommandText == "sftp")
+                {
+                    var sftp = new SftpService(OperatingSystem.IsWindows() ? @"C:\" : @"/");
+                    e.Channel.DataReceived += (ss, ee) => sftp.OnData(ee);
+                    e.Channel.CloseReceived += (ss, ee) => sftp.OnClose();
+                    sftp.DataReceived += (ss, ee) => e.Channel.SendData(ee);
+                }
             }
         }
     }

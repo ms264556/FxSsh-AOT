@@ -90,5 +90,10 @@ namespace FxSsh
 
             return span.ToArray();
         }
+
+        public byte[] GetRemainderBytes()
+        {
+            return _bytes[_position..].ToArray();
+        }
     }
 }

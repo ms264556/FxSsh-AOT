@@ -20,6 +20,7 @@ FxSsh adheres to the following RFC documents
 - [RFC5656](https://tools.ietf.org/html/rfc5656)  Elliptic Curve Algorithm Integration
 - [RFC6668](https://tools.ietf.org/html/rfc6668)  SHA-2 Data Integrity Algorithms
 - [RFC8332](https://tools.ietf.org/html/rfc8332)  Use of RSA Keys with SHA-2
+- [draft-ietf-secsh-filexfer-02](https://tools.ietf.org/html/draft-ietf-secsh-filexfer-02)  SSH File Transfer Protocol (sftp version 3)
 
 ### Supported Algorithms
 
@@ -36,6 +37,7 @@ FxSsh adheres to the following RFC documents
 |--------------------|-------------------------------------------------------------------------|
 | **Authentication** | `publickey`, `password`                                                 |
 | **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`      |
+| **subsystem**      | `sftp (version 3)`                                                      |
 
 ### Tested Clients
 
@@ -43,6 +45,7 @@ FxSsh adheres to the following RFC documents
 |-----------------|-------------------------------------------------|
 | OpenSSH         | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`     |
 | PuTTY           | `Release 0.82`                                  |
+| WinSCP          | `6.3.6` (sftp only)                             |
 
 ### Sample code
 ```cs
@@ -104,6 +107,7 @@ TA==
     server.AddHostKey("ecdsa-sha2-nistp256", ecdsap256Pem);
     server.AddHostKey("ecdsa-sha2-nistp384", ecdsap384Pem);
     server.AddHostKey("ecdsa-sha2-nistp521", ecdsap521Pem);
+
     server.ConnectionAccepted += server_ConnectionAccepted;
 
     server.Start();
@@ -192,11 +196,11 @@ static void service_Userauth(object sender, UserauthArgs e)
 
 static void service_CommandOpened(object sender, CommandRequestedArgs e)
 {
-    Console.WriteLine($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\".");
+    Console.WriteLine($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\", client key SHA256:{e.AttachedUserauthArgs.Fingerprint}.");
 
-    var allow = true;  // func(e.ShellType, e.CommandText, e.AttachedUserauthArgs);
+    e.Agreed = true;  // func(e.ShellType, e.CommandText, e.AttachedUserauthArgs);
 
-    if (!allow)
+    if (!e.Agreed)
         return;
 
     if (e.ShellType == "shell")
@@ -230,7 +234,13 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
     }
     else if (e.ShellType == "subsystem")
     {
-        // do something more
+        if (e.CommandText == "sftp")
+        {
+            var sftp = new SftpService(OperatingSystem.IsWindows() ? @"C:\" : @"/");
+            e.Channel.DataReceived += (ss, ee) => sftp.OnData(ee);
+            e.Channel.CloseReceived += (ss, ee) => sftp.OnClose();
+            sftp.DataReceived += (ss, ee) => e.Channel.SendData(ee);
+        }
     }
 }
 ```
