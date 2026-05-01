@@ -140,6 +140,8 @@ static void e_ServiceRegistered(object sender, SshService e)
     if (e is UserAuthService)
     {
         var service = (UserAuthService)e;
+        // WARNING: Enabling "none" auth poses a high security risk. Please ensure you understand the risks before using it.
+        service.EnableNoneUserAuth = true;
         service.UserAuth += service_UserAuth;
     }
     else if (e is ConnectionService)
@@ -253,5 +255,10 @@ KeyGenerator.ConvertRsaBase64KeyToPem("base64"); \\ convert old rsa base64 key t
 ```
 
 ---
+### Acknowledgements
+As noted in their own documentation, significant portions of Microsoft's
+[Dev Tunnels SSH](https://github.com/microsoft/dev-tunnels-ssh/tree/main/src/cs/Ssh#acknowledgements)
+library were originally derived from FxSsh.
+
 ### License
 The MIT license

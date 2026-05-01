@@ -12,6 +12,8 @@ namespace FxSsh.Services
         {
         }
 
+        public bool EnableNoneAuth { get; set; } = false;
+
         public event EventHandler<UserAuthArgs> UserAuth;
 
         public event EventHandler<string> Succeed;
@@ -31,6 +33,10 @@ namespace FxSsh.Services
         {
             switch (message.MethodName)
             {
+                case "none" when EnableNoneAuth:
+                    var noneMsg = Message.LoadFrom<NoneRequestMessage>(message);
+                    HandleMessage(noneMsg);
+                    break;
                 case "publickey":
                     var keyMsg = Message.LoadFrom<PublicKeyRequestMessage>(message);
                     HandleMessage(keyMsg);
@@ -40,10 +46,31 @@ namespace FxSsh.Services
                     HandleMessage(pswdMsg);
                     break;
                 case "hostbased":
-                case "none":
                 default:
                     _session.SendMessage(new FailureMessage());
                     break;
+            }
+        }
+
+        private void HandleMessage(NoneRequestMessage message)
+        {
+            var verifed = false;
+            var args = new UserAuthArgs(_session);
+            if (UserAuth != null)
+            {
+                UserAuth(this, args);
+                verifed = args.Result;
+            }
+            if (verifed)
+            {
+                _session.RegisterService(message.ServiceName, args);
+                Succeed?.Invoke(this, message.ServiceName);
+                _session.SendMessage(new SuccessMessage());
+                return;
+            }
+            else
+            {
+                _session.SendMessage(new FailureMessage());
             }
         }
 

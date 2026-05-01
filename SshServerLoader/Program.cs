@@ -100,6 +100,8 @@ TA==
             if (e is UserAuthService)
             {
                 var service = (UserAuthService)e;
+                // WARNING: Enabling "none" auth poses a high security risk. Please ensure you understand the risks before using it.
+                service.EnableNoneAuth = true;
                 service.UserAuth += service_UserAuth;
             }
             else if (e is ConnectionService)
