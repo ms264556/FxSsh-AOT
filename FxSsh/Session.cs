@@ -34,7 +34,8 @@ namespace FxSsh
         internal static readonly Dictionary<string, Func<CompressionAlgorithm>> _compressionAlgorithms = [];
 
         private readonly object _locker = new();
-        private readonly Socket _socket;
+        private Socket _socket;
+        private bool _disconnected;
 #if DEBUG
         private readonly TimeSpan _timeout = TimeSpan.FromDays(1);
 #else
@@ -129,7 +130,7 @@ namespace FxSsh
 
             try
             {
-                while (_socket != null && _socket.Connected)
+                while (!_disconnected && _socket != null && _socket.Connected)
                 {
                     var message = ReceiveMessage();
                     if (message is UnknownMessage unknownMessage)
@@ -144,11 +145,24 @@ namespace FxSsh
                 {
                     service.CloseService();
                 }
+
+                Disconnect();
             }
         }
 
         public void Disconnect(DisconnectReason reason = DisconnectReason.ByApplication, string description = "Connection terminated by the server.")
         {
+            bool runTeardown;
+            lock (_locker)
+            {
+                runTeardown = !_disconnected;
+                _disconnected = true;
+            }
+            if (!runTeardown)
+            {
+                return;
+            }
+
             if (reason == DisconnectReason.ByApplication)
             {
                 var message = new DisconnectMessage(reason, description);
@@ -162,6 +176,10 @@ namespace FxSsh
                 _socket.Dispose();
             }
             catch { }
+            finally
+            {
+                _socket = null;
+            }
 
             Disconnected?.Invoke(this, EventArgs.Empty);
         }
