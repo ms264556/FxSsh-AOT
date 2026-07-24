@@ -9,6 +9,7 @@ namespace FxSsh.Services
     {
         protected ConnectionService _connectionService;
         protected EventWaitHandle _sendingWindowWaitHandle = new ManualResetEvent(false);
+        private readonly object _windowLocker = new object();
 
         public Channel(ConnectionService connectionService,
             uint clientChannelId, uint clientInitialWindowSize, uint clientMaxPacketSize,
@@ -65,7 +66,14 @@ namespace FxSsh.Services
             byte[] buf = null;
             do
             {
-                var packetSize = Math.Min(Math.Min(ClientWindowSize, ClientMaxPacketSize), total);
+                uint packetSize;
+                lock (_windowLocker)
+                {
+                    packetSize = Math.Min(Math.Min(ClientWindowSize, ClientMaxPacketSize), total);
+                    if (packetSize > 0)
+                        ClientWindowSize -= packetSize;
+                }
+
                 if (packetSize == 0)
                 {
                     _sendingWindowWaitHandle.WaitOne();
@@ -79,7 +87,6 @@ namespace FxSsh.Services
                 msg.Data = buf;
                 _connectionService._session.SendMessage(msg);
 
-                ClientWindowSize -= packetSize;
                 total -= packetSize;
                 offset += packetSize;
             } while (total > 0);
@@ -135,7 +142,8 @@ namespace FxSsh.Services
 
         internal void ClientAdjustWindow(uint bytesToAdd)
         {
-            ClientWindowSize += bytesToAdd;
+            lock (_windowLocker)
+                ClientWindowSize += bytesToAdd;
 
             // pulse multithreadings in same time and unsignal until thread switched
             // don't try to use AutoResetEvent
