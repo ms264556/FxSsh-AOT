@@ -21,6 +21,11 @@ namespace FxSsh
         internal const int MaximumSshPacketSize = LocalChannelDataPacketSize;
         internal const int InitialLocalWindowSize = LocalChannelDataPacketSize * 32;
         internal const int LocalChannelDataPacketSize = 1024 * 32;
+        // RFC 4253 §6.1: all implementations MUST be able to process packets with
+        // a total size of 35000 bytes or less; anything larger is rejected to
+        internal const int MaximumPacketLength = 35000;
+        // RFC 4253 §6: minimum packet size is 16 bytes total, i.e. packet_length >= 12.
+        internal const int MinimumPacketLength = 12;
 
         private static readonly Dictionary<byte, Type> _messagesMetadata;
         internal static readonly Dictionary<string, Func<KexAlgorithm>> _keyExchangeAlgorithms = [];
@@ -217,6 +222,14 @@ namespace FxSsh
 
         private byte[] SocketRead(int length)
         {
+            // buffer larger than a full SSH packet (+ length field and MAC).
+            if (length < 0 || length > MaximumPacketLength + 4 + 64)
+            {
+                throw new SshConnectionException(
+                    string.Format("Invalid read length {0}.", length),
+                    DisconnectReason.ProtocolError);
+            }
+
             var pos = 0;
             var buffer = new byte[length];
 
@@ -314,6 +327,14 @@ namespace FxSsh
                 firstBlock = _algorithms.ClientEncryption.Transform(firstBlock);
 
             var packetLength = firstBlock[0] << 24 | firstBlock[1] << 16 | firstBlock[2] << 8 | firstBlock[3];
+            if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
+            {
+                throw new SshConnectionException(
+                    string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
+                        (uint)packetLength, MinimumPacketLength, MaximumPacketLength),
+                    DisconnectReason.ProtocolError);
+            }
+
             var paddingLength = firstBlock[4];
             var bytesToRead = packetLength - blockSize + 4;
 
