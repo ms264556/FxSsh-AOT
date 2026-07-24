@@ -201,14 +201,13 @@ namespace FxSsh
             var buffer = new byte[255];
             var dummy = new byte[255];
             var pos = 0;
-            var len = 0;
 
             while (pos < buffer.Length)
             {
-                var ar = _socket.BeginReceive(buffer, pos, buffer.Length - pos, SocketFlags.Peek, null, null);
-                WaitHandle(ar);
-                len = _socket.EndReceive(ar);
+                if (!WaitForSocket(SelectMode.SelectRead))
+                    throw new SshConnectionException("Could't read the protocal version", DisconnectReason.ProtocolError);
 
+                var len = _socket.Receive(buffer, pos, buffer.Length - pos, SocketFlags.Peek);
                 if (len == 0)
                 {
                     throw new SshConnectionException("Could't read the protocal version", DisconnectReason.ProtocolError);
@@ -239,7 +238,6 @@ namespace FxSsh
 
         private byte[] SocketRead(int length)
         {
-            // buffer larger than a full SSH packet (+ length field and MAC).
             if (length < 0 || length > MaximumPacketLength + 4 + 64)
             {
                 throw new SshConnectionException(
@@ -247,51 +245,31 @@ namespace FxSsh
                     DisconnectReason.ProtocolError);
             }
 
-            var pos = 0;
             var buffer = new byte[length];
-
-            var msSinceLastData = 0;
+            var pos = 0;
 
             while (pos < length)
             {
+                if (!WaitForSocket(SelectMode.SelectRead))
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+
+                int len;
                 try
                 {
-                    var ar = _socket.BeginReceive(buffer, pos, length - pos, SocketFlags.None, null, null);
-                    WaitHandle(ar);
-                    var len = _socket.EndReceive(ar);
-                    if (!_socket.Connected)
-                    {
-                        throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
-                    }
-
-                    if (len == 0 && _socket.Available == 0)
-                    {
-                        if (msSinceLastData >= _timeout.TotalMilliseconds)
-                        {
-                            throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
-                        }
-
-                        msSinceLastData += 50;
-                        Thread.Sleep(50);
-                    }
-                    else
-                    {
-                        msSinceLastData = 0;
-                    }
-
-                    pos += len;
+                    len = _socket.Receive(buffer, pos, length - pos, SocketFlags.None);
                 }
-                catch (SocketException exp)
+                catch (SocketException exp) when (
+                    exp.SocketErrorCode == SocketError.WouldBlock ||
+                    exp.SocketErrorCode == SocketError.IOPending ||
+                    exp.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
                 {
-                    if (exp.SocketErrorCode == SocketError.WouldBlock ||
-                        exp.SocketErrorCode == SocketError.IOPending ||
-                        exp.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
-                    {
-                        Thread.Sleep(30);
-                    }
-                    else
-                        throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+                    continue;
                 }
+
+                if (len == 0)
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+
+                pos += len;
             }
 
             return buffer;
@@ -304,32 +282,38 @@ namespace FxSsh
 
             while (pos < length)
             {
+                if (!WaitForSocket(SelectMode.SelectWrite))
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+
+                int sent;
                 try
                 {
-                    var ar = _socket.BeginSend(data, pos, length - pos, SocketFlags.None, null, null);
-                    WaitHandle(ar);
-                    pos += _socket.EndSend(ar);
+                    sent = _socket.Send(data, pos, length - pos, SocketFlags.None);
                 }
-                catch (SocketException ex)
+                catch (SocketException ex) when (
+                    ex.SocketErrorCode == SocketError.WouldBlock ||
+                    ex.SocketErrorCode == SocketError.IOPending ||
+                    ex.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
                 {
-                    if (ex.SocketErrorCode == SocketError.WouldBlock ||
-                        ex.SocketErrorCode == SocketError.IOPending ||
-                        ex.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
-                    {
-                        Thread.Sleep(30);
-                    }
-                    else
-                        throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+                    continue;
                 }
+
+                if (sent == 0)
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+
+                pos += sent;
             }
         }
 
-        private void WaitHandle(IAsyncResult ar)
+        private bool WaitForSocket(SelectMode mode)
         {
-            if (!ar.AsyncWaitHandle.WaitOne(_timeout))
-                throw new SshConnectionException(string.Format("Socket operation has timed out after {0:F0} milliseconds.",
-                    _timeout.TotalMilliseconds),
-                    DisconnectReason.ConnectionLost);
+            // Non-blocking wait before Receive/Send so the I/O thread never spins or
+            // sleeps on the socket. Poll takes microseconds; clamp the (debug) timeout
+            // to int.MaxValue so a very large value cannot overflow the argument.
+            var microSeconds = _timeout.TotalMilliseconds >= int.MaxValue / 1000d
+                ? int.MaxValue
+                : (int)(_timeout.TotalMilliseconds * 1000);
+            return _socket.Poll(microSeconds, mode);
         }
         #endregion
 
@@ -339,11 +323,11 @@ namespace FxSsh
             var useAlg = _algorithms != null;
 
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ClientEncryption.BlockBytesSize) : 8);
-            var firstBlock = SocketRead(blockSize);
+            var rawFirst = SocketRead(blockSize);
             if (useAlg)
-                firstBlock = _algorithms.ClientEncryption.Transform(firstBlock);
+                _algorithms.ClientEncryption.Transform(rawFirst, rawFirst);
 
-            var packetLength = firstBlock[0] << 24 | firstBlock[1] << 16 | firstBlock[2] << 8 | firstBlock[3];
+            var packetLength = rawFirst[0] << 24 | rawFirst[1] << 16 | rawFirst[2] << 8 | rawFirst[3];
             if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
             {
                 throw new SshConnectionException(
@@ -352,28 +336,33 @@ namespace FxSsh
                     DisconnectReason.ProtocolError);
             }
 
-            var paddingLength = firstBlock[4];
+            var paddingLength = rawFirst[4];
             var bytesToRead = packetLength - blockSize + 4;
 
             var followingBlocks = SocketRead(bytesToRead);
             if (useAlg && followingBlocks.Length > 0)
-                followingBlocks = _algorithms.ClientEncryption.Transform(followingBlocks);
+                _algorithms.ClientEncryption.Transform(followingBlocks, followingBlocks);
 
-            var fullPacket = new ReadOnlyMemory<byte>([.. firstBlock, .. followingBlocks]);
-            var data = fullPacket[5..(packetLength - paddingLength + 5)];
+            var dataLength = packetLength - paddingLength;
+            var data = new byte[dataLength];
+            var fromFirst = Math.Min(dataLength, blockSize - 5);
+            if (fromFirst > 0)
+                Buffer.BlockCopy(rawFirst, 5, data, 0, fromFirst);
+            Buffer.BlockCopy(followingBlocks, 0, data, fromFirst, dataLength - fromFirst);
+
             if (useAlg)
             {
                 var clientMac = SocketRead(_algorithms.ClientHmac.DigestLength);
-                var mac = ComputeHmac(_algorithms.ClientHmac, fullPacket, _inboundPacketSequence);
+                var mac = ComputeHmac(_algorithms.ClientHmac, rawFirst, followingBlocks, _inboundPacketSequence);
                 if (!clientMac.SequenceEqual(mac))
                 {
                     throw new SshConnectionException("Invalid MAC", DisconnectReason.MacError);
                 }
 
-                data = _algorithms.ClientCompression.Decompress(data);
+                data = _algorithms.ClientCompression.Decompress(data).ToArray();
             }
 
-            var typeNumber = data.Span[0];
+            var typeNumber = data[0];
             var implemented = _messagesMetadata.ContainsKey(typeNumber);
             var message = implemented
                 ? (Message)Activator.CreateInstance(_messagesMetadata[typeNumber])
@@ -441,8 +430,11 @@ namespace FxSsh
 
             if (useAlg)
             {
-                var mac = ComputeHmac(_algorithms.ServerHmac, payload, _outboundPacketSequence);
-                payload = _algorithms.ServerEncryption.Transform(payload).Concat(mac).ToArray();
+                var mac = ComputeHmac(_algorithms.ServerHmac, payload, Array.Empty<byte>(), _outboundPacketSequence);
+                var encrypted = new byte[payload.Length + mac.Length];
+                _algorithms.ServerEncryption.Transform(payload, encrypted);
+                Buffer.BlockCopy(mac, 0, encrypted, payload.Length, mac.Length);
+                payload = encrypted;
             }
 
             SocketWrite(payload);
@@ -785,14 +777,9 @@ namespace FxSsh
             return keyBuffer;
         }
 
-        private byte[] ComputeHmac(HmacAlgorithm alg, ReadOnlyMemory<byte> payload, uint seq)
+        private byte[] ComputeHmac(HmacAlgorithm alg, byte[] a, byte[] b, uint seq)
         {
-            var bytes = new SshDataWriter(4 + payload.Length)
-                .Write(seq)
-                .WriteBytes(payload)
-                .ToByteArray();
-
-            return alg.ComputeHash(bytes);
+            return alg.ComputeHash(a, b, seq);
         }
 
         internal SshService RegisterService(string serviceName, UserAuthArgs auth = null)

@@ -37,8 +37,13 @@ namespace FxSsh.Algorithms
         public byte[] Transform(byte[] input)
         {
             var output = new byte[input.Length];
-            _transform.TransformBlock(input, 0, input.Length, output, 0);
+            Transform(input, output);
             return output;
+        }
+
+        public void Transform(byte[] input, byte[] output)
+        {
+            _transform.TransformBlock(input, 0, input.Length, output, 0);
         }
 
         private ICryptoTransform CreateTransform(bool isEncryption)
