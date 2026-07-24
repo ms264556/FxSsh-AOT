@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Globalization;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -26,9 +25,6 @@ namespace FxSsh.Algorithms
 
         public DiffieHellmanKex(int sha2Bitlen, int bitlen)
         {
-            Contract.Requires(sha2Bitlen == 256 || sha2Bitlen == 512);
-            Contract.Requires(bitlen == 2048 || bitlen == 4096 || bitlen == 8192);
-
             switch (sha2Bitlen)
             {
                 case 256:
@@ -75,7 +71,7 @@ namespace FxSsh.Algorithms
 
         public override byte[] DecryptKeyExchange(byte[] keyEx)
         {
-            Contract.Requires(keyEx != null);
+            ArgumentNullException.ThrowIfNull(keyEx);
 
             var pvr = new BigInteger(keyEx, isUnsigned: true, isBigEndian: true);
             var z = BigInteger.ModPow(pvr, _x, _p);

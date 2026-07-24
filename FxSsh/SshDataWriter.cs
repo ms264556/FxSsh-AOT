@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.IO;
 using System.Text;
 
@@ -45,8 +44,8 @@ namespace FxSsh
 
         public SshDataWriter Write(string str, Encoding encoding)
         {
-            Contract.Requires(str != null);
-            Contract.Requires(encoding != null);
+            ArgumentNullException.ThrowIfNull(str);
+            ArgumentNullException.ThrowIfNull(encoding);
 
             var bytes = encoding.GetBytes(str);
             WriteBinary(bytes);

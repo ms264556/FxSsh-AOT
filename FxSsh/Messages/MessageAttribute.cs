@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 
 namespace FxSsh.Messages
 {
@@ -8,7 +7,7 @@ namespace FxSsh.Messages
     {
         public MessageAttribute(string name, byte number)
         {
-            Contract.Requires(name != null);
+            ArgumentNullException.ThrowIfNull(name);
 
             Name = name;
             Number = number;

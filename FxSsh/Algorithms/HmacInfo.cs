@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Security.Cryptography;
 
 namespace FxSsh.Algorithms
@@ -8,7 +7,7 @@ namespace FxSsh.Algorithms
     {
         public HmacInfo(KeyedHashAlgorithm algorithm, int keySize)
         {
-            Contract.Requires(algorithm != null);
+            ArgumentNullException.ThrowIfNull(algorithm);
 
             KeySize = keySize;
             Hmac = key => new HmacAlgorithm(algorithm, keySize, key);

@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Text;
 
 namespace FxSsh
@@ -70,7 +69,7 @@ namespace FxSsh
 
         public string ReadString(Encoding encoding)
         {
-            Contract.Requires(encoding != null);
+            ArgumentNullException.ThrowIfNull(encoding);
 
             var span = ReadBinaryAsMemory().Span;
             return encoding.GetString(span);

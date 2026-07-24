@@ -4,7 +4,6 @@ using FxSsh.Services;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -94,8 +93,8 @@ namespace FxSsh
 
         public Session(Socket socket, Dictionary<string, string> hostKey, string serverBanner)
         {
-            Contract.Requires(socket != null);
-            Contract.Requires(hostKey != null);
+            ArgumentNullException.ThrowIfNull(socket);
+            ArgumentNullException.ThrowIfNull(hostKey);
 
             _socket = socket;
             _hostKey = hostKey.ToDictionary(s => s.Key, s => s.Value);
@@ -378,7 +377,7 @@ namespace FxSsh
 
         internal void SendMessage(Message message)
         {
-            Contract.Requires(message != null);
+            ArgumentNullException.ThrowIfNull(message);
 
             if (_exchangeContext != null
                 && message.MessageType > 4 && (message.MessageType < 20 || message.MessageType > 49))
@@ -473,7 +472,7 @@ namespace FxSsh
 
         internal bool TrySendMessage(Message message)
         {
-            Contract.Requires(message != null);
+            ArgumentNullException.ThrowIfNull(message);
 
             try
             {
@@ -780,7 +779,7 @@ namespace FxSsh
 
         internal SshService RegisterService(string serviceName, UserAuthArgs auth = null)
         {
-            Contract.Requires(serviceName != null);
+            ArgumentNullException.ThrowIfNull(serviceName);
 
             SshService service = null;
             switch (serviceName)

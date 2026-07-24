@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -6,10 +6,10 @@ namespace FxSsh.Services
     {
         public EnvironmentArgs(SessionChannel channel, string name, string value, UserAuthArgs userAuthArgs)
         {
-            Contract.Requires(channel != null);
-            Contract.Requires(name != null);
-            Contract.Requires(value != null);
-            Contract.Requires(userAuthArgs != null);
+            ArgumentNullException.ThrowIfNull(channel);
+            ArgumentNullException.ThrowIfNull(name);
+            ArgumentNullException.ThrowIfNull(value);
+            ArgumentNullException.ThrowIfNull(userAuthArgs);
 
             Channel = channel;
             Name = name;

@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -6,9 +6,8 @@ namespace FxSsh.Services
     {
         public CommandRequestedArgs(SessionChannel channel, string type, string command, UserAuthArgs userAuthArgs)
         {
-            Contract.Requires(channel != null);
-            Contract.Requires(command != null);
-            Contract.Requires(userAuthArgs != null);
+            ArgumentNullException.ThrowIfNull(channel);
+            ArgumentNullException.ThrowIfNull(userAuthArgs);
 
             Channel = channel;
             ShellType = type;

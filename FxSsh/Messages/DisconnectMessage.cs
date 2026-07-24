@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 using System.Text;
 
 namespace FxSsh.Messages
@@ -14,8 +14,8 @@ namespace FxSsh.Messages
 
         public DisconnectMessage(DisconnectReason reasonCode, string description = "", string language = "en")
         {
-            Contract.Requires(description != null);
-            Contract.Requires(language != null);
+            ArgumentNullException.ThrowIfNull(description);
+            ArgumentNullException.ThrowIfNull(language);
 
             ReasonCode = reasonCode;
             Description = description;

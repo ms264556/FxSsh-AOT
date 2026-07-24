@@ -1,11 +1,9 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Security.Cryptography;
 using System.Text;
 
 namespace FxSsh.Algorithms
 {
-    [ContractClass(typeof(PublicKeyAlgorithmContract))]
     public abstract class PublicKeyAlgorithm
     {
         public PublicKeyAlgorithm(string key)
@@ -35,7 +33,7 @@ namespace FxSsh.Algorithms
 
         public byte[] CreateSignatureData(byte[] data)
         {
-            Contract.Requires(data != null);
+            ArgumentNullException.ThrowIfNull(data);
 
             return new SshDataWriter()
                 .Write(this.Name, Encoding.ASCII)

@@ -1,5 +1,5 @@
-﻿using System.ComponentModel;
-using System.Diagnostics.Contracts;
+﻿using System;
+using System.ComponentModel;
 using System.Security.Cryptography;
 
 namespace FxSsh.Algorithms
@@ -12,10 +12,11 @@ namespace FxSsh.Algorithms
 
         public EncryptionAlgorithm(SymmetricAlgorithm algorithm, int keySize, CipherModeEx mode, byte[] key, byte[] iv, bool isEncryption)
         {
-            Contract.Requires(algorithm != null);
-            Contract.Requires(key != null);
-            Contract.Requires(iv != null);
-            Contract.Requires(keySize == key.Length << 3);
+            ArgumentNullException.ThrowIfNull(algorithm);
+            ArgumentNullException.ThrowIfNull(key);
+            ArgumentNullException.ThrowIfNull(iv);
+            if (keySize != key.Length << 3)
+                throw new ArgumentException("Key size must match the key length in bits.", nameof(keySize));
 
             algorithm.KeySize = keySize;
             algorithm.Key = key;

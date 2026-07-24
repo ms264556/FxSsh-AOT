@@ -3,7 +3,6 @@ using FxSsh.Messages.Connection;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,7 +22,7 @@ namespace FxSsh.Services
         public ConnectionService(Session session, UserAuthArgs auth)
             : base(session)
         {
-            Contract.Requires(auth != null);
+            ArgumentNullException.ThrowIfNull(auth);
 
             _auth = auth;
 
@@ -51,7 +50,7 @@ namespace FxSsh.Services
 
         internal void HandleMessageCore(ConnectionServiceMessage message)
         {
-            Contract.Requires(message != null);
+            ArgumentNullException.ThrowIfNull(message);
 
             if (message is ChannelWindowAdjustMessage)
                 this.HandleMessage((dynamic)message);

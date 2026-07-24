@@ -1,6 +1,5 @@
 ﻿using FxSsh.Messages.Connection;
 using System;
-using System.Diagnostics.Contracts;
 using System.Threading;
 
 namespace FxSsh.Services
@@ -15,7 +14,7 @@ namespace FxSsh.Services
             uint clientChannelId, uint clientInitialWindowSize, uint clientMaxPacketSize,
             uint serverChannelId)
         {
-            Contract.Requires(connectionService != null);
+            ArgumentNullException.ThrowIfNull(connectionService);
 
             _connectionService = connectionService;
 
@@ -51,7 +50,7 @@ namespace FxSsh.Services
 
         public void SendData(byte[] data)
         {
-            Contract.Requires(data != null);
+            ArgumentNullException.ThrowIfNull(data);
 
             if (data.Length == 0)
             {
@@ -117,7 +116,7 @@ namespace FxSsh.Services
 
         internal void OnData(byte[] data)
         {
-            Contract.Requires(data != null);
+            ArgumentNullException.ThrowIfNull(data);
 
             ServerAttemptAdjustWindow((uint)data.Length);
 

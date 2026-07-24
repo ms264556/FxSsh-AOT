@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -14,8 +13,6 @@ namespace FxSsh.Algorithms
         public RsaKey(int sha2Bitlen, string key)
             : base(key)
         {
-            Contract.Requires(sha2Bitlen == 256 || sha2Bitlen == 512);
-
             switch (sha2Bitlen)
             {
                 case 256:

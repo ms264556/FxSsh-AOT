@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -12,9 +12,9 @@ namespace FxSsh.Services
 
         public UserAuthArgs(Session session, string username, string keyAlgorithm, string fingerprint, byte[] key)
         {
-            Contract.Requires(keyAlgorithm != null);
-            Contract.Requires(fingerprint != null);
-            Contract.Requires(key != null);
+            ArgumentNullException.ThrowIfNull(keyAlgorithm);
+            ArgumentNullException.ThrowIfNull(fingerprint);
+            ArgumentNullException.ThrowIfNull(key);
 
             AuthMethod = "publickey";
             KeyAlgorithm = keyAlgorithm;
@@ -26,8 +26,8 @@ namespace FxSsh.Services
 
         public UserAuthArgs(Session session, string username, string password)
         {
-            Contract.Requires(username != null);
-            Contract.Requires(password != null);
+            ArgumentNullException.ThrowIfNull(username);
+            ArgumentNullException.ThrowIfNull(password);
 
             AuthMethod = "password";
             Username = username;

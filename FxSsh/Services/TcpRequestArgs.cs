@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -6,9 +6,9 @@ namespace FxSsh.Services
     {
         public TcpRequestArgs(SessionChannel channel, string host, int port, string originatorIP, int originatorPort, UserAuthArgs userAuthArgs)
         {
-            Contract.Requires(channel != null);
-            Contract.Requires(host != null);
-            Contract.Requires(originatorIP != null);
+            ArgumentNullException.ThrowIfNull(channel);
+            ArgumentNullException.ThrowIfNull(host);
+            ArgumentNullException.ThrowIfNull(originatorIP);
 
             Channel = channel;
             Host = host;

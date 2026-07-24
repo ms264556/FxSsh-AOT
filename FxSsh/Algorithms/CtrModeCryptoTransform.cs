@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 using System.Security.Cryptography;
 
 namespace FxSsh.Algorithms
@@ -13,7 +13,7 @@ namespace FxSsh.Algorithms
 
         public CtrModeCryptoTransform(SymmetricAlgorithm algorithm)
         {
-            Contract.Requires(algorithm != null);
+            ArgumentNullException.ThrowIfNull(algorithm);
 
             algorithm.Mode = CipherMode.ECB;
             algorithm.Padding = PaddingMode.None;

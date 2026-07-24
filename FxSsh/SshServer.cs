@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Diagnostics.Contracts;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -23,7 +22,7 @@ namespace FxSsh
 
         public SshServer(StartingInfo info)
         {
-            Contract.Requires(info != null);
+            ArgumentNullException.ThrowIfNull(info);
 
             StartingInfo = info;
         }
@@ -81,8 +80,8 @@ namespace FxSsh
 
         public void AddHostKey(string type, string xml)
         {
-            Contract.Requires(type != null);
-            Contract.Requires(xml != null);
+            ArgumentNullException.ThrowIfNull(type);
+            ArgumentNullException.ThrowIfNull(xml);
 
             if (!_hostKey.ContainsKey(type))
                 _hostKey.Add(type, xml);

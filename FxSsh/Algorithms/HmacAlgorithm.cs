@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 using System.Security.Cryptography;
 
 namespace FxSsh.Algorithms
@@ -9,9 +9,10 @@ namespace FxSsh.Algorithms
 
         public HmacAlgorithm(KeyedHashAlgorithm algorithm, int keySize, byte[] key)
         {
-            Contract.Requires(algorithm != null);
-            Contract.Requires(key != null);
-            Contract.Requires(keySize == key.Length << 3);
+            ArgumentNullException.ThrowIfNull(algorithm);
+            ArgumentNullException.ThrowIfNull(key);
+            if (keySize != key.Length << 3)
+                throw new ArgumentException("Key size must match the key length in bits.", nameof(keySize));
 
             _algorithm = algorithm;
             algorithm.Key = key;
@@ -24,7 +25,7 @@ namespace FxSsh.Algorithms
 
         public byte[] ComputeHash(byte[] input)
         {
-            Contract.Requires(input != null);
+            ArgumentNullException.ThrowIfNull(input);
 
             return _algorithm.ComputeHash(input);
         }

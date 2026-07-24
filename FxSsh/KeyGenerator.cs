@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Security.Cryptography;
 
 namespace FxSsh
@@ -8,7 +7,8 @@ namespace FxSsh
     {
         public static string GenerateRsaKeyPem(int bitlen)
         {
-            Contract.Requires(bitlen == 2048 || bitlen == 4096 || bitlen == 8192);
+            if (bitlen != 2048 && bitlen != 4096 && bitlen != 8192)
+                throw new ArgumentOutOfRangeException(nameof(bitlen), bitlen, "Bit length must be 2048, 4096 or 8192.");
 
             var rsa = RSA.Create(bitlen);
             return rsa.ExportPkcs8PrivateKeyPem();
@@ -16,7 +16,8 @@ namespace FxSsh
 
         public static string GenerateECDsaKeyPem(string curveName)
         {
-            Contract.Requires(curveName == "nistp256" || curveName == "nistp384" || curveName == "nistp521");
+            if (curveName != "nistp256" && curveName != "nistp384" && curveName != "nistp521")
+                throw new ArgumentOutOfRangeException(nameof(curveName), curveName, "Curve name must be nistp256, nistp384 or nistp521.");
 
             var curve = default(ECCurve);
             if (curveName == "nistp256") curve = ECCurve.NamedCurves.nistP256;
@@ -28,7 +29,7 @@ namespace FxSsh
 
         public static string ConvertRsaBase64KeyToPem(string oldBase64Key)
         {
-            Contract.Requires(oldBase64Key != null);
+            ArgumentNullException.ThrowIfNull(oldBase64Key);
 
             var rsa = new RSACryptoServiceProvider();
             var bytes = Convert.FromBase64String(oldBase64Key);

@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Linq;
 using System.Security.Cryptography;
 
@@ -9,9 +8,11 @@ namespace FxSsh.Algorithms
     {
         public CipherInfo(SymmetricAlgorithm algorithm, int keySize, CipherModeEx mode)
         {
-            Contract.Requires(algorithm != null);
-            Contract.Requires(algorithm.LegalKeySizes.Any(x =>
-                x.MinSize <= keySize && keySize <= x.MaxSize && keySize % x.SkipSize == 0));
+            ArgumentNullException.ThrowIfNull(algorithm);
+            if (!algorithm.LegalKeySizes.Any(x =>
+                x.MinSize <= keySize && keySize <= x.MaxSize
+                && (x.SkipSize == 0 ? keySize == x.MinSize : keySize % x.SkipSize == 0)))
+                throw new ArgumentOutOfRangeException(nameof(keySize), keySize, "Key size is not legal for the algorithm.");
 
             algorithm.KeySize = keySize;
             KeySize = algorithm.KeySize;

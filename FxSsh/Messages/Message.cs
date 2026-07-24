@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 
 namespace FxSsh.Messages
 {
@@ -33,7 +32,7 @@ namespace FxSsh.Messages
 
         public static T LoadFrom<T>(Message message) where T : Message, new()
         {
-            Contract.Requires(message != null);
+            ArgumentNullException.ThrowIfNull(message);
 
             var msg = new T();
             msg.Load(message.RawBytes);
@@ -42,14 +41,14 @@ namespace FxSsh.Messages
 
         protected virtual void OnLoad(SshDataReader reader)
         {
-            Contract.Requires(reader != null);
+            ArgumentNullException.ThrowIfNull(reader);
 
             throw new NotSupportedException();
         }
 
         protected virtual void OnGetPacket(SshDataWriter writer)
         {
-            Contract.Requires(writer != null);
+            ArgumentNullException.ThrowIfNull(writer);
 
             throw new NotSupportedException();
         }

@@ -1,7 +1,6 @@
 ﻿using FxSsh.Messages;
 using FxSsh.Messages.UserAuth;
 using System;
-using System.Diagnostics.Contracts;
 
 namespace FxSsh.Services
 {
@@ -24,7 +23,7 @@ namespace FxSsh.Services
 
         internal void HandleMessageCore(UserAuthServiceMessage message)
         {
-            Contract.Requires(message != null);
+            ArgumentNullException.ThrowIfNull(message);
 
             this.HandleMessage((dynamic)message);
         }

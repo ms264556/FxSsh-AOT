@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -8,7 +8,7 @@ namespace FxSsh.Services
 
         public SshService(Session session)
         {
-            Contract.Requires(session != null);
+            ArgumentNullException.ThrowIfNull(session);
 
             _session = session;
         }

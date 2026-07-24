@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -6,10 +6,10 @@ namespace FxSsh.Services
     {
         public PtyArgs(SessionChannel channel, string terminal, uint heightPx, uint heightRows, uint widthPx, uint widthChars, string modes, UserAuthArgs userAuthArgs)
         {
-            Contract.Requires(channel != null);
-            Contract.Requires(terminal != null);
-            Contract.Requires(modes != null);
-            Contract.Requires(userAuthArgs != null);
+            ArgumentNullException.ThrowIfNull(channel);
+            ArgumentNullException.ThrowIfNull(terminal);
+            ArgumentNullException.ThrowIfNull(modes);
+            ArgumentNullException.ThrowIfNull(userAuthArgs);
 
             Channel = channel;
             Terminal = terminal;

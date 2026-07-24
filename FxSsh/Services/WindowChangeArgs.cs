@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 
 namespace FxSsh.Services
 {
@@ -6,7 +6,7 @@ namespace FxSsh.Services
     {
         public WindowChangeArgs(SessionChannel channel, uint widthColumns, uint heightRows, uint widthPixels, uint heightPixels)
         {
-            Contract.Requires(channel != null);
+            ArgumentNullException.ThrowIfNull(channel);
 
             Channel = channel;
             WidthColumns = widthColumns;

@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Diagnostics.Contracts;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -14,7 +13,8 @@ namespace FxSsh.Algorithms
         public EcdsaKey(string curveName, string key)
             : base(key)
         {
-            Contract.Requires(curveName == "nistp256" || curveName == "nistp384" || curveName == "nistp521");
+            if (curveName != "nistp256" && curveName != "nistp384" && curveName != "nistp521")
+                throw new ArgumentOutOfRangeException(nameof(curveName), curveName, "Curve name must be nistp256, nistp384 or nistp521.");
 
             _curveName = curveName;
             var noKey = string.IsNullOrEmpty(key);

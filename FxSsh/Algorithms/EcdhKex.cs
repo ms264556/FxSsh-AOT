@@ -1,4 +1,4 @@
-﻿using System.Diagnostics.Contracts;
+﻿using System;
 using System.IO;
 using System.Numerics;
 using System.Security.Cryptography;
@@ -11,7 +11,8 @@ namespace FxSsh.Algorithms
 
         public EcdhKex(string curveName)
         {
-            Contract.Requires(curveName == "nistp256" || curveName == "nistp384" || curveName == "nistp521");
+            if (curveName != "nistp256" && curveName != "nistp384" && curveName != "nistp521")
+                throw new ArgumentOutOfRangeException(nameof(curveName), curveName, "Curve name must be nistp256, nistp384 or nistp521.");
 
             if (curveName == "nistp256")
             {
@@ -42,7 +43,7 @@ namespace FxSsh.Algorithms
 
         public override byte[] DecryptKeyExchange(byte[] exchangeData)
         {
-            Contract.Requires(exchangeData != null);
+            ArgumentNullException.ThrowIfNull(exchangeData);
 
             var reader = new SshDataReader(exchangeData);
             if (reader.ReadByte() != 0x04)
