@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using static MiniTerm.Native.PseudoConsoleApi;
 
 namespace MiniTerm
 {
@@ -39,20 +40,56 @@ namespace MiniTerm
         /// </summary>
         public void Run()
         {
-            // copy all pseudoconsole output to stdout
+            // Wait on the process handle directly (avoids System.Diagnostics.Process.Exited
+            // which can silently fail due to insufficient handle access rights).
+            ThreadPool.RegisterWaitForSingleObject(
+                new AutoResetEvent(false)
+                {
+                    SafeWaitHandle = new SafeWaitHandle(process.ProcessInfo.hProcess, ownsHandle: false)
+                },
+                (state, timedOut) =>
+                {
+                    // CancelIoEx forcibly terminates the pending ReadFile and unblocks
+                    // reader.Read(). Unlike Dispose(), it works even while SafeFileHandle
+                    // has an outstanding reference count from the active read.
+                    try { CancelIoEx(outputPipe.ReadSide, IntPtr.Zero); } catch { }
+                },
+                null, Timeout.Infinite, executeOnlyOnce: true);
+
             Task.Run(() =>
             {
-                var proc = System.Diagnostics.Process.GetProcessById(process.ProcessInfo.dwProcessId);
-
-                var buf = new byte[1024];
-                while (!proc.HasExited)
+                var buf = new byte[1024 * 4];
+                try
                 {
-                    var length = reader.Read(buf, 0, buf.Length);
-                    if (length == 0)
-                        break;
-                    DataReceived?.Invoke(this, buf.Take(length).ToArray());
+                    while (true)
+                    {
+                        int length;
+                        try
+                        {
+                            length = reader.Read(buf, 0, buf.Length);
+                        }
+                        catch (IOException)
+                        {
+                            break;    // ERROR_OPERATION_ABORTED from CancelIoEx after process exit
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;    // .NET 10 OSFileStreamStrategy maps cancelled I/O to this
+                        }
+                        catch (ObjectDisposedException)
+                        {
+                            break;
+                        }
+                        if (length == 0)
+                            break;
+                        DataReceived?.Invoke(this, buf.Take(length).ToArray());
+                    }
                 }
-                CloseReceived?.Invoke(this, 0);
+                finally
+                {
+                    try { writer.Dispose(); } catch { }
+                    CloseReceived?.Invoke(this, 0);
+                }
             });
         }
 
@@ -64,8 +101,14 @@ namespace MiniTerm
 
         public void OnClose()
         {
-            writer.WriteByte(0x03);
-            writer.Flush();
+            try { writer.Dispose(); } catch { }
+            try
+            {
+                var proc = System.Diagnostics.Process.GetProcessById(process.ProcessInfo.dwProcessId);
+                if (!proc.HasExited)
+                    proc.Kill();   // Terminate the child shell to avoid orphan processes
+            }
+            catch { }
         }
 
         private void DisposeResources(params IDisposable[] disposables)

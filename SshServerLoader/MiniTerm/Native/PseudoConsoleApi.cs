@@ -29,5 +29,9 @@ namespace MiniTerm.Native
 
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         internal static extern bool CreatePipe(out SafeFileHandle hReadPipe, out SafeFileHandle hWritePipe, IntPtr lpPipeAttributes, int nSize);
+
+        /// <summary>Cancels all pending I/O on the specified handle from any thread.</summary>
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern bool CancelIoEx(SafeFileHandle handle, IntPtr lpOverlapped);
     }
 }

@@ -201,7 +201,8 @@ TA==
                     var sftp = new SftpService(OperatingSystem.IsWindows() ? @"C:\" : @"/");
                     e.Channel.DataReceived += (ss, ee) => sftp.OnData(ee);
                     e.Channel.CloseReceived += (ss, ee) => sftp.OnClose();
-                    sftp.DataReceived += (ss, ee) => e.Channel.SendData(ee);
+                    sftp.DataReceived += async (ss, ee) => e.Channel.SendData(ee);
+                    sftp.CloseReceived += async (ss, ee) => e.Channel.SendClose(ee);
                 }
             }
         }

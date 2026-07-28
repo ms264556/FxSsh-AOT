@@ -104,6 +104,7 @@ namespace SshServerLoader
         public void OnClose()
         {
             _cancellationTokenSource.Cancel();
+            CloseReceived?.Invoke(this, 0);
         }
 
         public void WaitForClose()
@@ -112,6 +113,7 @@ namespace SshServerLoader
         }
 
         public EventHandler<byte[]> DataReceived;
+        public EventHandler<uint> CloseReceived;
 
         #region Process requests
         private void ProcessRequest(SshDataReader reader)
