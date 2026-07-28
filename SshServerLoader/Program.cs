@@ -111,13 +111,7 @@ TA==
                 service.EnvReceived += service_EnvReceived;
                 service.PtyReceived += service_PtyReceived;
                 service.TcpForwardRequest += service_TcpForwardRequest;
-                service.WindowChange += Service_WindowChange;
             }
-        }
-
-        static void Service_WindowChange(object sender, WindowChangeArgs e)
-        {
-            // DEMO MiniTerm not support change window size
         }
 
         static void service_TcpForwardRequest(object sender, TcpRequestArgs e)
@@ -171,6 +165,7 @@ TA==
                 // also, you can call powershell.exe
                 var terminal = new Terminal("cmd.exe", windowWidth, windowHeight);
 
+                e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
                 e.Channel.DataReceived += (ss, ee) => terminal.OnInput(ee);
                 e.Channel.CloseReceived += (ss, ee) => terminal.OnClose();
                 terminal.DataReceived += (ss, ee) => e.Channel.SendData(ee);

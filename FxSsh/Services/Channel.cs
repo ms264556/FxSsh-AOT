@@ -47,6 +47,7 @@ namespace FxSsh.Services
         public event EventHandler<byte[]> DataReceived;
         public event EventHandler EofReceived;
         public event EventHandler CloseReceived;
+        public event EventHandler<WindowChangeArgs> WindowChange;
 
         public void SendData(byte[] data)
         {
@@ -137,6 +138,11 @@ namespace FxSsh.Services
             CloseReceived?.Invoke(this, EventArgs.Empty);
 
             CheckBothClosed();
+        }
+
+        internal void OnWindowChange(WindowChangeArgs args)
+        {
+            WindowChange?.Invoke(this, args);
         }
 
         internal void ClientAdjustWindow(uint bytesToAdd)

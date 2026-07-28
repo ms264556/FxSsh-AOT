@@ -31,6 +31,20 @@ namespace MiniTerm
             return new PseudoConsole(hPC);
         }
 
+        /// <summary>
+        /// Notifies the child pseudo console of a host console window size change,
+        /// causing the child process (cmd.exe, powershell, etc.) to receive a
+        /// WINDOW_BUFFER_SIZE_EVENT / SIGWINCH and re-lay out its output.
+        /// </summary>
+        internal void Resize(int width, int height)
+        {
+            var resizeResult = ResizePseudoConsole(this.Handle, new COORD { X = (short)width, Y = (short)height });
+            if (resizeResult != 0)
+            {
+                throw new InvalidOperationException("Could not resize pseudo console. Error Code " + resizeResult);
+            }
+        }
+
         public void Dispose()
         {
             ClosePseudoConsole(Handle);

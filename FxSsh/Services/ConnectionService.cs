@@ -33,7 +33,6 @@ namespace FxSsh.Services
         public event EventHandler<EnvironmentArgs> EnvReceived;
         public event EventHandler<PtyArgs> PtyReceived;
         public event EventHandler<TcpRequestArgs> TcpForwardRequest;
-        public event EventHandler<WindowChangeArgs> WindowChange;
 
         protected internal override void CloseService()
         {
@@ -308,7 +307,7 @@ namespace FxSsh.Services
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
-            WindowChange?.Invoke(this, new WindowChangeArgs(channel, message.WidthColumns, message.HeightRows, message.WidthPixels, message.HeightPixels));
+            channel.OnWindowChange(new WindowChangeArgs(channel, message.WidthColumns, message.HeightRows, message.WidthPixels, message.HeightPixels));
         }
 
         private T FindChannelByClientId<T>(uint id) where T : Channel

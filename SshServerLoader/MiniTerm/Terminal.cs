@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using static MiniTerm.Native.ConsoleApi;
 using static MiniTerm.Native.PseudoConsoleApi;
 
 namespace MiniTerm
@@ -23,6 +24,10 @@ namespace MiniTerm
 
         public Terminal(string command, int windowWidth, int windowHeight)
         {
+            // The pseudo console outputs UTF-8 bytes; ensure the host console
+            // interprets them as UTF-8 rather than the legacy OEM code page.
+            SetConsoleOutputCP(CP_UTF8);
+
             inputPipe = new PseudoConsolePipe();
             outputPipe = new PseudoConsolePipe();
             pseudoConsole = PseudoConsole.Create(inputPipe.ReadSide, outputPipe.WriteSide, windowWidth, windowHeight);
@@ -109,6 +114,15 @@ namespace MiniTerm
                     proc.Kill();   // Terminate the child shell to avoid orphan processes
             }
             catch { }
+        }
+
+        /// <summary>
+        /// Resizes the pseudo console window, causing the child process to receive
+        /// a WINDOW_BUFFER_SIZE_EVENT and re-lay out its output.
+        /// </summary>
+        public void Resize(int width, int height)
+        {
+            pseudoConsole.Resize(width, height);
         }
 
         private void DisposeResources(params IDisposable[] disposables)

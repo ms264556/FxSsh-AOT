@@ -11,6 +11,7 @@ namespace MiniTerm.Native
         internal const int STD_OUTPUT_HANDLE = -11;
         internal const uint ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004;
         internal const uint DISABLE_NEWLINE_AUTO_RETURN = 0x0008;
+        internal const uint CP_UTF8 = 65001;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern SafeFileHandle GetStdHandle(int nStdHandle);
@@ -20,6 +21,9 @@ namespace MiniTerm.Native
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool GetConsoleMode(SafeFileHandle handle, out uint mode);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        internal static extern bool SetConsoleOutputCP(uint wCodePageID);
 
         internal delegate bool ConsoleEventDelegate(CtrlTypes ctrlType);
 
