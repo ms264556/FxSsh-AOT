@@ -109,7 +109,7 @@ namespace FxSsh
             try
             {
                 var socket = _listenser.EndAcceptSocket(ar);
-                Task.Run(() =>
+                Task.Factory.StartNew(() =>
                 {
                     var session = new Session(socket, _hostKey, StartingInfo.ServerBanner);
                     session.Disconnected += (ss, ee) =>
@@ -133,7 +133,7 @@ namespace FxSsh
                         session.Disconnect();
                         ExceptionRaised?.Invoke(this, ex);
                     }
-                });
+                }, TaskCreationOptions.LongRunning);
             }
             catch
             {
