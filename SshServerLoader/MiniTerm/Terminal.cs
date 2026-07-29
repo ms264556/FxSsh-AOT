@@ -93,7 +93,13 @@ namespace MiniTerm
                 finally
                 {
                     try { writer.Dispose(); } catch { }
-                    CloseReceived?.Invoke(this, 0);
+                    // Report the real shell exit code rather than a hard-coded 0,
+                    // so the SSH "exit-status" channel request reflects `exit N`.
+                    // GetExitCodeProcess may briefly return STILL_ACTIVE (259)
+                    // if the wait callback hasn't fired yet; collapse that to 0
+                    // to avoid leaking an implementation artifact to the client.
+                    var code = process.ExitCode;
+                    CloseReceived?.Invoke(this, code == 259 ? 0u : code);
                 }
             });
         }

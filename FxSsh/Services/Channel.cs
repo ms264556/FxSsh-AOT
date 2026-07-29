@@ -9,6 +9,7 @@ namespace FxSsh.Services
         protected ConnectionService _connectionService;
         protected EventWaitHandle _sendingWindowWaitHandle = new ManualResetEvent(false);
         private readonly object _windowLocker = new object();
+        private bool _forceClosed;
 
         public Channel(ConnectionService connectionService,
             uint clientChannelId, uint clientInitialWindowSize, uint clientMaxPacketSize,
@@ -115,6 +116,35 @@ namespace FxSsh.Services
             CheckBothClosed();
         }
 
+        /// <summary>
+        /// Close the channel after the process was terminated by a signal,
+        /// emitting an "exit-signal" channel request (RFC 4254 section 10.2) before
+        /// SSH_MSG_CHANNEL_CLOSE. Mutually exclusive with SendClose(exitCode):
+        /// a channel reports EITHER exit-status OR exit-signal, never both.
+        /// </summary>
+        /// <param name="signalName">Signal name WITHOUT "SIG" prefix (e.g. "TERM", "KILL", "SEGV").</param>
+        /// <param name="coreDumped">Whether the process produced a core dump.</param>
+        /// <param name="errorMessage">Human-readable explanation (may be empty).</param>
+        /// <param name="language">Language tag per RFC 3066 (defaults to "en").</param>
+        public void SendSignalClose(string signalName, bool coreDumped = false, string errorMessage = "", string language = "en")
+        {
+            if (ServerClosed)
+                return;
+
+            ServerClosed = true;
+            _connectionService._session.SendMessage(new ExitSignalMessage
+            {
+                RecipientChannel = ClientChannelId,
+                SignalName = signalName ?? string.Empty,
+                CoreDumped = coreDumped,
+                ErrorMessage = errorMessage ?? string.Empty,
+                Language = language ?? "en",
+            });
+            _connectionService._session.SendMessage(new ChannelCloseMessage { RecipientChannel = ClientChannelId });
+
+            CheckBothClosed();
+        }
+
         internal void OnData(byte[] data)
         {
             ArgumentNullException.ThrowIfNull(data);
@@ -181,6 +211,17 @@ namespace FxSsh.Services
 
         internal void ForceClose()
         {
+            // ForceClose can be reached more than once: SendClose() drives it
+            // when the server side closes first, and OnClose() drives it again
+            // when the client's CHANNEL_CLOSE arrives (or vice versa), plus
+            // any external listener wired onto CloseReceived can re-enter it.
+            // The wait handle below is a single-use resource; Close() then Set()
+            // on a second pass throws ObjectDisposedException. Guard with a
+            // flag so teardown happens exactly once.
+            if (_forceClosed)
+                return;
+            _forceClosed = true;
+
             _connectionService.RemoveChannel(this);
             _sendingWindowWaitHandle.Set();
             _sendingWindowWaitHandle.Close();

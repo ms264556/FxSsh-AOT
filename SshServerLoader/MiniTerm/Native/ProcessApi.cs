@@ -82,5 +82,9 @@ namespace MiniTerm.Native
 
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern bool CloseHandle(IntPtr hObject);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
     }
 }

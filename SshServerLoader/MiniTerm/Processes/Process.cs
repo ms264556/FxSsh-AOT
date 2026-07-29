@@ -18,6 +18,21 @@ namespace MiniTerm
         public STARTUPINFOEX StartupInfo { get; }
         public PROCESS_INFORMATION ProcessInfo { get; }
 
+        /// <summary>
+        /// Returns the process exit code via GetExitCodeProcess. Returns
+        /// 259 (STILL_ACTIVE) if queried before the process terminates.
+        /// </summary>
+        public uint ExitCode
+        {
+            get
+            {
+                if (ProcessInfo.hProcess == IntPtr.Zero)
+                    return 0;
+                GetExitCodeProcess(ProcessInfo.hProcess, out uint code);
+                return code;
+            }
+        }
+
         #region IDisposable Support
 
         private bool disposedValue = false; // To detect redundant calls
