@@ -1,9 +1,11 @@
 ﻿using FxSsh.Algorithms;
 using FxSsh.Messages;
+using FxSsh.Messages.Connection;
 using FxSsh.Services;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -42,6 +44,17 @@ namespace FxSsh
         private readonly TimeSpan _timeout = TimeSpan.FromSeconds(30);
 #endif
         private readonly Dictionary<string, string> _hostKey;
+
+        // Server-side keepalive. IdleThreshold is both the idle threshold that
+        // starts the probing and the resend cadence once probing has started.
+        // Probes are counted; MaxMissedProbes unanswered probes disconnect the
+        // session. Both directions of traffic refresh _lastActivity (sending a
+        // frame also proves the link is alive and advances the peer's ACK).
+        private const int MaxMissedProbes = 3;
+        private TimeSpan _keepaliveIdle = TimeSpan.Zero;   // <=0 means disabled
+        private Stopwatch _lastActivity;
+        private int _missedProbes;
+        private Timer _keepaliveTimer;
 
         private uint _outboundPacketSequence;
         private uint _inboundPacketSequence;
@@ -162,6 +175,9 @@ namespace FxSsh
             {
                 return;
             }
+
+            _keepaliveTimer?.Dispose();
+            _keepaliveTimer = null;
 
             if (reason == DisconnectReason.ByApplication)
             {
@@ -379,6 +395,10 @@ namespace FxSsh
 
             ConsiderReExchange();
 
+            // Any inbound frame proves the link is alive; refresh the keepalive
+            // idle clock so probing does not fire while the peer is active.
+            _lastActivity?.Restart();
+
             return message;
         }
 
@@ -446,6 +466,10 @@ namespace FxSsh
             }
 
             ConsiderReExchange();
+
+            // Outbound traffic also proves the link is alive (and advances the
+            // peer's ACK), so it counts toward keepalive idle resetting.
+            _lastActivity?.Restart();
         }
 
         private void ConsiderReExchange(bool force = false)
@@ -664,6 +688,142 @@ namespace FxSsh
         private void HandleMessage(UnimplementedMessage message)
         {
             // Nothing to do here
+        }
+
+        private void HandleMessage(GlobalRequestMessage message)
+        {
+            // SSH_MSG_GLOBAL_REQUEST (RFC 4254 section 4) can arrive at any
+            // time, even before ssh-connection is registered, so we handle it
+            // here at the session level rather than forwarding to ConnectionService.
+            switch (message.RequestName)
+            {
+                case "keepalive@openssh.com":
+                    // OpenSSH keepalive: no payload, just probe liveness.
+                    // Reply SUCCESS when the peer asks for a reply; keep silent
+                    // otherwise (want-reply=false is a one-way probe).
+                    if (message.WantReply)
+                        SendMessage(new RequestSuccessMessage());
+                    break;
+                default:
+                    // Unknown global request: reply FAILURE if asked, do not
+                    // tear down the session (global requests are advisory).
+                    if (message.WantReply)
+                        SendMessage(new RequestFailureMessage());
+                    break;
+            }
+        }
+
+        private void HandleMessage(RequestSuccessMessage message)
+        {
+            // SSH_MSG_REQUEST_SUCCESS (RFC 4254 section 4): a peer honoured our
+            // keepalive probe. Both SUCCESS and FAILURE prove liveness, so clear
+            // the missed-probe counter. The activity clock itself is already
+            // refreshed in ReceiveMessage, the single inbound entry point.
+            Interlocked.Exchange(ref _missedProbes, 0);
+        }
+
+        private void HandleMessage(RequestFailureMessage message)
+        {
+            // SSH_MSG_REQUEST_FAILURE (RFC 4254 section 4): a peer rejected our
+            // global request. For keepalive this still proves liveness, so we
+            // do not treat it as an error; same counter reset as for SUCCESS.
+            Interlocked.Exchange(ref _missedProbes, 0);
+        }
+
+        /// <summary>
+        /// Send a keepalive@openssh.com global request to the peer and ask for
+        /// a reply. Use this from a server-side idle timer to detect dead
+        /// connections before the TCP keepalive timeout fires. The peer's
+        /// REQUEST_SUCCESS / REQUEST_FAILURE is handled by the corresponding
+        /// HandleMessage overloads; both are treated as proof of liveness.
+        /// </summary>
+        public void SendGlobalKeepalive()
+        {
+            SendMessage(new GlobalRequestMessage
+            {
+                RequestName = "keepalive@openssh.com",
+                WantReply = true,
+            });
+        }
+
+        /// <summary>
+        /// Enable or update server-side keepalive probing. After the session
+        /// has been idle (no inbound or outbound traffic) for <paramref name="idle"/>,
+        /// the server sends a keepalive@openssh.com global request every
+        /// <paramref name="idle"/> interval. If the peer fails to answer
+        /// MaxMissedProbes consecutive probes the session is torn down.
+        /// Pass a non-positive value to disable probing. Calling this before
+        /// the session is established is allowed; the timer starts immediately.
+        /// </summary>
+        public void ConfigureKeepalive(TimeSpan idle)
+        {
+            lock (_locker)
+            {
+                _keepaliveIdle = idle;
+
+                if (idle <= TimeSpan.Zero)
+                {
+                    _keepaliveTimer?.Dispose();
+                    _keepaliveTimer = null;
+                    _missedProbes = 0;
+                    return;
+                }
+
+                _lastActivity ??= Stopwatch.StartNew();
+
+                // Period = idle: when idle has elapsed we start probing at the
+                // same cadence. DueTime also idle so the first probe fires one
+                // idle window after the last activity, not immediately.
+                var due = (int)Math.Min(idle.TotalMilliseconds, int.MaxValue);
+                if (_keepaliveTimer == null)
+                    _keepaliveTimer = new Timer(KeepaliveTick, null, due, due);
+                else
+                    _keepaliveTimer.Change(due, due);
+            }
+        }
+
+        private void KeepaliveTick(object state)
+        {
+            if (_disconnected || _socket == null)
+                return;
+
+            // Not idle long enough yet - peer is active, nothing to probe.
+            if (_lastActivity?.Elapsed < _keepaliveIdle)
+                return;
+
+            // Idle window elapsed: probe and count. If the peer answers, the
+            // RequestSuccess/Failure handler clears the counter; otherwise we
+            // keep accumulating until MaxMissedProbes, then tear down.
+            //
+            // SendGlobalKeepalive() can block on WaitForSocket(Poll) for up to
+            // the socket-receive timeout (30 s release, 1 d debug). During that
+            // window another concurrent timer callback may have disconnected the
+            // session via the MaxMissedProbes path and disposed the socket, causing
+            // ObjectDisposedException when the blocking Poll finally completes.
+            // Guard by re-checking _disconnected after the send returns, and
+            // protect the send itself against the disposed-socket race.
+            try
+            {
+                SendGlobalKeepalive();
+            }
+            catch (ObjectDisposedException)
+            {
+                // The socket was disposed by another concurrent callback that
+                // already handled the disconnect - nothing more to do.
+                return;
+            }
+
+            // Re-check: another concurrent callback may have disconnected us
+            // while SendGlobalKeepalive was blocked on Poll. If so, our probe
+            // went nowhere; do not count it.
+            if (_disconnected)
+                return;
+
+            var missed = Interlocked.Increment(ref _missedProbes);
+            if (missed >= MaxMissedProbes)
+            {
+                Disconnect(DisconnectReason.ByApplication, "Keepalive timeout.");
+            }
         }
 
         private void HandleMessage(ServiceRequestMessage message)

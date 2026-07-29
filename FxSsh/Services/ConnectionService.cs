@@ -171,6 +171,18 @@ namespace FxSsh.Services
                 case "auth-agent-req@openssh.com":
                     // https://github.com/openssh/openssh-portable/blob/V_8_0_P1/session.c#L2225
                     break;
+                case "keepalive@openssh.com":
+                    // OpenSSH liveness probe sent on a specific channel rather
+                    // than via SSH_MSG_GLOBAL_REQUEST. No payload; just prove
+                    // we are alive when the peer asks for a reply. Do NOT fall
+                    // through to default - that would throw and tear down the
+                    // session, defeating the probe.
+                    if (message.WantReply)
+                    {
+                        var channelKeepAlive = FindChannelByServerId<Channel>(message.RecipientChannel);
+                        _session.SendMessage(new ChannelSuccessMessage { RecipientChannel = channelKeepAlive.ClientChannelId });
+                    }
+                    break;
                 default:
                     if (message.WantReply)
                         _session.SendMessage(new ChannelFailureMessage
