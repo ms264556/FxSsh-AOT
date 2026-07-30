@@ -111,7 +111,25 @@ TA==
                 service.EnvReceived += service_EnvReceived;
                 service.PtyReceived += service_PtyReceived;
                 service.TcpForwardRequest += service_TcpForwardRequest;
+                service.TcpForwardRequestReceived += service_TcpForwardRequestReceived;
             }
+        }
+
+        /// <summary>
+        /// Reverse port forwarding: peer asks the server to bind a listener
+        /// (SSH_MSG_GLOBAL_REQUEST "tcpip-forward"). Set Accepted = true to
+        /// permit; default false rejects. The library manages the listener and
+        /// the forwarded-tcpip channels; the host only authorizes.
+        /// </summary>
+        static void service_TcpForwardRequestReceived(object sender, TcpForwardRequestArgs e)
+        {
+            Console.WriteLine("Peer requests reverse forward at {0}:{1}", e.Address, e.Port);
+
+            // DEMO: permit everything. In production, gate by address/port and
+            // by e.AttachedUserAuthArgs (the authenticated user) to avoid the
+            // peer opening listeners on privileged or external interfaces.
+            var allow = true;
+            e.Accepted = allow;
         }
 
         static void service_TcpForwardRequest(object sender, TcpRequestArgs e)

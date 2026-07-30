@@ -14,6 +14,14 @@ namespace FxSsh.Messages.Connection
 
         public override byte MessageType { get { return MessageNumber; } }
 
+        protected override void OnLoad(SshDataReader reader)
+        {
+            RecipientChannel = reader.ReadUInt32();
+            ReasonCode = (ChannelOpenFailureReason)reader.ReadUInt32();
+            Description = reader.ReadString(Encoding.ASCII);
+            Language = reader.ReadString(Encoding.ASCII);
+        }
+
         protected override void OnGetPacket(SshDataWriter writer)
         {
             writer.Write(RecipientChannel);

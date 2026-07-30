@@ -4,6 +4,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,6 +21,12 @@ namespace FxSsh.Services
         private readonly CancellationTokenSource _messageCts = new();
 
         private int _serverChannelCounter = -1;
+
+        // Reverse port forwarding: one listener per (address, port) the peer
+        // requested via "tcpip-forward". Keyed by (address, port) using the
+        // bound endpoint the listener actually used (so cancel-tcpip-forward
+        // matches against the bound port the peer learned from our SUCCESS).
+        private readonly Dictionary<(string address, uint port), PortForwardingService> _forwarders = new();
 
         public ConnectionService(Session session, UserAuthArgs auth)
             : base(session)
@@ -34,6 +43,13 @@ namespace FxSsh.Services
         public event EventHandler<PtyArgs> PtyReceived;
         public event EventHandler<TcpRequestArgs> TcpForwardRequest;
 
+        /// <summary>
+        /// Raised when the peer requests a reverse port forwarding listener
+        /// via SSH_MSG_GLOBAL_REQUEST "tcpip-forward". The host MUST set
+        /// args.Accepted = true to permit the listener; default false rejects.
+        /// </summary>
+        public event EventHandler<TcpForwardRequestArgs> TcpForwardRequestReceived;
+
         protected internal override void CloseService()
         {
             _messageCts.Cancel();
@@ -44,6 +60,14 @@ namespace FxSsh.Services
                 {
                     channel.ForceClose();
                 }
+
+                // Tear down all reverse-forward listeners; their TCP sockets
+                // are independent of the SSH session and must not outlive it.
+                foreach (var fwd in _forwarders.Values)
+                {
+                    try { fwd.Dispose(); } catch { }
+                }
+                _forwarders.Clear();
             }
         }
 
@@ -113,6 +137,226 @@ namespace FxSsh.Services
                 (int)message.OriginatorPort,
                 _auth);
             TcpForwardRequest?.Invoke(this, args);
+        }
+
+        /// <summary>
+        /// Handle SSH_MSG_GLOBAL_REQUEST "tcpip-forward" / "cancel-tcpip-forward"
+        /// (RFC 4254 section 4 + 7.2). Forwarded from Session when ssh-connection
+        /// is already registered. Keepalive is handled at the session level and
+        /// never reaches here.
+        /// </summary>
+        internal void HandleMessage(GlobalRequestMessage message)
+        {
+            switch (message.RequestName)
+            {
+                case "tcpip-forward":
+                    HandleTcpIpForward(message);
+                    break;
+                case "cancel-tcpip-forward":
+                    HandleCancelTcpIpForward(message);
+                    break;
+                default:
+                    // Unknown global request: reply FAILURE if asked, do not
+                    // tear down the session (global requests are advisory).
+                    if (message.WantReply)
+                        _session.SendMessage(new RequestFailureMessage());
+                    break;
+            }
+        }
+
+        private void HandleTcpIpForward(GlobalRequestMessage message)
+        {
+            // RFC 4254 section 7.2 payload: string address; uint port.
+            string address;
+            uint port;
+            try
+            {
+                var reader = new SshDataReader(message.RequestData);
+                address = reader.ReadString(Encoding.ASCII);
+                port = reader.ReadUInt32();
+            }
+            catch
+            {
+                if (message.WantReply)
+                    _session.SendMessage(new RequestFailureMessage());
+                return;
+            }
+
+            // Defer policy/permission to the host; the library only provides
+            // the mechanism. Default: accept everything the host permitted by
+            // wiring TcpForwardRequestAccepted.
+            var args = new TcpForwardRequestArgs(address, (int)port, _auth);
+            TcpForwardRequestReceived?.Invoke(this, args);
+            if (!args.Accepted)
+            {
+                if (message.WantReply)
+                    _session.SendMessage(new RequestFailureMessage());
+                return;
+            }
+
+            PortForwardingService fwd;
+            try
+            {
+                fwd = new PortForwardingService(address, port, OpenForwardedChannel);
+                fwd.Start();
+            }
+            catch
+            {
+                if (message.WantReply)
+                    _session.SendMessage(new RequestFailureMessage());
+                return;
+            }
+
+            lock (_locker)
+                _forwarders[(fwd.BoundAddress, fwd.BoundPort)] = fwd;
+
+            if (message.WantReply)
+            {
+                // RFC 4254 section 4: when the peer requested port 0, include
+                // the OS-assigned bound port in the SUCCESS payload; otherwise
+                // SUCCESS carries no payload.
+                if (port == 0)
+                {
+                    var success = new RequestSuccessMessageWithPort(fwd.BoundPort);
+                    _session.SendMessage(success);
+                }
+                else
+                {
+                    _session.SendMessage(new RequestSuccessMessage());
+                }
+            }
+        }
+
+        private void HandleCancelTcpIpForward(GlobalRequestMessage message)
+        {
+            // RFC 4254 section 7.2 payload: string address; uint port.
+            string address;
+            uint port;
+            try
+            {
+                var reader = new SshDataReader(message.RequestData);
+                address = reader.ReadString(Encoding.ASCII);
+                port = reader.ReadUInt32();
+            }
+            catch
+            {
+                if (message.WantReply)
+                    _session.SendMessage(new RequestFailureMessage());
+                return;
+            }
+
+            PortForwardingService fwd;
+            lock (_locker)
+            {
+                if (!_forwarders.TryGetValue((address, port), out fwd))
+                {
+                    // Address may have been normalized by the listener (e.g. Any).
+                    // Fall back to a single-match by port alone.
+                    fwd = _forwarders.Values.FirstOrDefault(f => f.BoundPort == port);
+                    if (fwd != null)
+                        _forwarders.Remove((fwd.BoundAddress, fwd.BoundPort));
+                }
+                else
+                {
+                    _forwarders.Remove((address, port));
+                }
+            }
+
+            if (fwd == null)
+            {
+                if (message.WantReply)
+                    _session.SendMessage(new RequestFailureMessage());
+                return;
+            }
+
+            try { fwd.Dispose(); } catch { }
+
+            if (message.WantReply)
+                _session.SendMessage(new RequestSuccessMessage());
+        }
+
+        /// <summary>
+        /// Factory called by PortForwardingService for each inbound TCP connection.
+        /// Sends SSH_MSG_CHANNEL_OPEN "forwarded-tcpip" to the peer, returns the
+        /// pending channel handle. Returns null if the peer rejects the open.
+        /// </summary>
+        private Channel OpenForwardedChannel(string boundAddress, uint boundPort,
+            string originatorIP, uint originatorPort)
+        {
+            var serverChannelId = (uint)Interlocked.Increment(ref _serverChannelCounter);
+
+            var channel = new PendingForwardedChannel(this, serverChannelId);
+            lock (_locker)
+                _channels.Add(channel);
+
+            var open = new ForwardedTcpIpOpenMessage(
+                serverChannelId,
+                Session.InitialLocalWindowSize,
+                Session.LocalChannelDataPacketSize,
+                boundAddress, boundPort,
+                originatorIP, originatorPort);
+            _session.SendMessage(open);
+
+            return channel;
+        }
+
+        /// <summary>
+        /// Resolve a server-initiated forwarded channel after the peer's
+        /// SSH_MSG_CHANNEL_OPEN_CONFIRMATION arrives. Flushes buffered SendData.
+        /// </summary>
+        private void HandleMessage(ChannelOpenConfirmationMessage message)
+        {
+            // message.RecipientChannel is the server-side id we chose; the peer
+            // echoes it back. message.SenderChannel is the peer's new channel id.
+            Channel channel;
+            lock (_locker)
+                channel = _channels.FirstOrDefault(c => c.ServerChannelId == message.RecipientChannel);
+
+            if (channel is PendingForwardedChannel pending)
+            {
+                pending.OnConfirmed(message.SenderChannel,
+                    message.InitialWindowSize, message.MaximumPacketSize);
+                return;
+            }
+
+            // Confirmation for a channel we did not initiate: protocol error,
+            // but safer to ignore than to tear down the session.
+        }
+
+        /// <summary>
+        /// Peer rejected our server-initiated forwarded-tcpip open. Tear down
+        /// the pending channel; the associated TCP socket (managed by
+        /// PortForwardingService) will be closed separately.
+        /// </summary>
+        private void HandleMessage(ChannelOpenFailureMessage message)
+        {
+            Channel channel;
+            lock (_locker)
+                channel = _channels.FirstOrDefault(c => c.ServerChannelId == message.RecipientChannel);
+
+            if (channel is PendingForwardedChannel pending)
+            {
+                lock (_locker)
+                    _channels.Remove(pending);
+                // Pending channel never registered with a bridge, so just drop.
+            }
+        }
+
+        /// <summary>Wrap a SUCCESS reply that carries a uint port payload (RFC 4254 section 4).</summary>
+        private sealed class RequestSuccessMessageWithPort : Message
+        {
+            private readonly uint _port;
+            public RequestSuccessMessageWithPort(uint port) { _port = port; }
+            public override byte MessageType => 81;
+            protected override void OnGetPacket(SshDataWriter writer)
+                => writer.Write(_port);
+        }
+
+        /// <summary>Server-initiated forwarded-tcpip channel awaiting confirmation.</summary>
+        private sealed class PendingForwardedChannel : Channel
+        {
+            public PendingForwardedChannel(ConnectionService svc, uint serverChannelId)
+                : base(svc, 0, 0, 0, serverChannelId) { }
         }
 
         private void HandleMessage(DirectTcpIpMessage message)

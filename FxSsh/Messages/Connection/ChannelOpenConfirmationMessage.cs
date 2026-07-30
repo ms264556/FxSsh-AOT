@@ -1,4 +1,5 @@
-﻿
+﻿using System.Text;
+
 namespace FxSsh.Messages.Connection
 {
     [Message("SSH_MSG_CHANNEL_OPEN_CONFIRMATION", MessageNumber)]
@@ -12,6 +13,14 @@ namespace FxSsh.Messages.Connection
         public uint MaximumPacketSize { get; set; }
 
         public override byte MessageType { get { return MessageNumber; } }
+
+        protected override void OnLoad(SshDataReader reader)
+        {
+            RecipientChannel = reader.ReadUInt32();
+            SenderChannel = reader.ReadUInt32();
+            InitialWindowSize = reader.ReadUInt32();
+            MaximumPacketSize = reader.ReadUInt32();
+        }
 
         protected override void OnGetPacket(SshDataWriter writer)
         {

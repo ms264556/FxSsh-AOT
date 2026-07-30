@@ -705,10 +705,18 @@ namespace FxSsh
                         SendMessage(new RequestSuccessMessage());
                     break;
                 default:
-                    // Unknown global request: reply FAILURE if asked, do not
-                    // tear down the session (global requests are advisory).
-                    if (message.WantReply)
+                    // Business-related global requests (tcpip-forward, etc.)
+                    // belong to the connection service. Forward when registered.
+                    // If not registered yet, reply FAILURE per RFC 4254.
+                    var conn = GetService<ConnectionService>();
+                    if (conn != null)
+                    {
+                        conn.HandleMessage(message);
+                    }
+                    else if (message.WantReply)
+                    {
                         SendMessage(new RequestFailureMessage());
+                    }
                     break;
             }
         }

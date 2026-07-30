@@ -36,7 +36,7 @@ FxSsh adheres to the following RFC documents
 | **Service**        | **Details**                                                             |
 |--------------------|-------------------------------------------------------------------------|
 | **Authentication** | `publickey`, `password`                                                 |
-| **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`      |
+| **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`<br>`tcpip-forward` / `cancel-tcpip-forward` (reverse port forwarding)      |
 | **subsystem**      | `sftp (version 3)`                                                      |
 
 ### Tested Clients
@@ -151,13 +151,18 @@ static void e_ServiceRegistered(object sender, SshService e)
         service.EnvReceived += service_EnvReceived;
         service.PtyReceived += service_PtyReceived;
         service.TcpForwardRequest += service_TcpForwardRequest;
-        service.WindowChange += Service_WindowChange;
+        service.TcpForwardRequestReceived += service_TcpForwardRequestReceived;
     }
 }
 
-static void Service_WindowChange(object sender, WindowChangeArgs e)
+static void service_TcpForwardRequestReceived(object sender, TcpForwardRequestArgs e)
 {
-    // DEMO MiniTerm not support change window size
+    Console.WriteLine("Peer requests reverse forward at {0}:{1}", e.Address, e.Port);
+
+    // DEMO: permit everything. In production, gate by address/port and by
+    // e.AttachedUserAuthArgs (the authenticated user) to avoid the peer
+    // opening listeners on privileged or external interfaces.
+    e.Accepted = true;
 }
 
 static void service_TcpForwardRequest(object sender, TcpRequestArgs e)
@@ -213,6 +218,7 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
 
         e.Channel.DataReceived += (ss, ee) => terminal.OnInput(ee);
         e.Channel.CloseReceived += (ss, ee) => terminal.OnClose();
+        e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
         terminal.DataReceived += (ss, ee) => e.Channel.SendData(ee);
         terminal.CloseReceived += (ss, ee) => e.Channel.SendClose(ee);
 

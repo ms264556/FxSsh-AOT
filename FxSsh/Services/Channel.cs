@@ -30,6 +30,44 @@ namespace FxSsh.Services
             ServerMaxPacketSize = Session.LocalChannelDataPacketSize;
         }
 
+        /// <summary>
+        /// Construct a server-initiated channel awaiting OPEN_CONFIRMATION.
+        /// ClientChannelId is 0 until the peer confirms; outbound SendData
+        /// calls are buffered until OnConfirmed resolves the peer channel.
+        /// </summary>
+        protected Channel(ConnectionService connectionService, uint serverChannelId)
+            : this(connectionService, 0, 0, 0, serverChannelId)
+        {
+            PendingConfirmation = true;
+        }
+
+        /// <summary>
+        /// Resolve the peer channel after receiving OPEN_CONFIRMATION. Flushes
+        /// any SendData bytes queued while pending. Safe to call once.
+        /// </summary>
+        internal void OnConfirmed(uint clientChannelId,
+            uint peerInitialWindowSize, uint peerMaximumPacketSize)
+        {
+            if (!PendingConfirmation)
+                return;
+            PendingConfirmation = false;
+
+            ClientChannelId = clientChannelId;
+            ClientInitialWindowSize = peerInitialWindowSize;
+            ClientWindowSize = peerInitialWindowSize;
+            ClientMaxPacketSize = peerMaximumPacketSize;
+            PeerInitialWindowSize = peerInitialWindowSize;
+            PeerMaximumPacketSize = peerMaximumPacketSize;
+
+            // Flush bytes produced while pending (in arrival order).
+            if (_pendingSends.Count > 0)
+            {
+                foreach (var chunk in _pendingSends)
+                    SendData(chunk);
+                _pendingSends.Clear();
+            }
+        }
+
         public uint ClientChannelId { get; private set; }
         public uint ClientInitialWindowSize { get; private set; }
         public uint ClientWindowSize { get; protected set; }
@@ -39,6 +77,16 @@ namespace FxSsh.Services
         public uint ServerInitialWindowSize { get; private set; }
         public uint ServerWindowSize { get; protected set; }
         public uint ServerMaxPacketSize { get; private set; }
+
+        /// <summary>True for a server-initiated channel awaiting OPEN_CONFIRMATION.</summary>
+        public bool PendingConfirmation { get; private set; }
+
+        /// <summary>Window advertised by the peer once OPEN_CONFIRMATION arrives; 0 until then.</summary>
+        public uint PeerInitialWindowSize { get; private set; }
+        public uint PeerMaximumPacketSize { get; private set; }
+
+        /// <summary>Queued outbound bytes produced before OPEN_CONFIRMATION arrives.</summary>
+        private readonly System.Collections.Generic.List<byte[]> _pendingSends = [];
 
         public bool ClientClosed { get; private set; }
         public bool ClientMarkedEof { get; private set; }
@@ -56,6 +104,14 @@ namespace FxSsh.Services
 
             if (data.Length == 0)
             {
+                return;
+            }
+
+            // Server-initiated channels buffer outbound bytes until the peer's
+            // OPEN_CONFIRMATION resolves ClientChannelId and the peer window.
+            if (PendingConfirmation)
+            {
+                _pendingSends.Add((byte[])data.Clone());
                 return;
             }
 
