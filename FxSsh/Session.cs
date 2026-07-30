@@ -63,6 +63,10 @@ namespace FxSsh
         private Algorithms _algorithms = null;
         private ExchangeContext _exchangeContext = null;
         private List<SshService> _services = [];
+
+        // Protocol extensions (RFC 8308)
+        private Dictionary<string, string> _extensionsToSend = [];
+        private bool _clientAdvertisedExtInfo;  // client KEXINIT had "ext-info-c"
         private ConcurrentQueue<Message> _blockedMessages = new();
         private EventWaitHandle _hasBlockedMessagesWaitHandle = new ManualResetEvent(true);
 
@@ -521,6 +525,10 @@ namespace FxSsh
 
         private Message LoadKexInitMessage()
         {
+            // RFC 8308: advertise ext-info-s so that the client knows
+            // we are willing to receive SSH_MSG_EXT_INFO.
+            var extNames = new HashSet<string> { "ext-info-s" };
+
             var message = new KeyExchangeInitMessage
             {
                 KeyExchangeAlgorithms = [.. _keyExchangeAlgorithms.Keys],
@@ -534,7 +542,8 @@ namespace FxSsh
                 LanguagesClientToServer = [""],
                 LanguagesServerToClient = [""],
                 FirstKexPacketFollows = false,
-                Reserved = 0
+                Reserved = 0,
+                ExtensionNames = extNames,
             };
 
             return message;
@@ -580,6 +589,9 @@ namespace FxSsh
             _exchangeContext.ServerCompression = ChooseAlgorithm([.. _compressionAlgorithms.Keys], message.CompressionAlgorithmsServerToClient);
 
             _exchangeContext.ClientKexInitPayload = message.GetPacket();
+
+            // RFC 8308: remember whether the client supports EXT_INFO.
+            _clientAdvertisedExtInfo = message.PeerExtensions.Contains("ext-info-c");
         }
 
         private void HandleMessage(KeyExchangeXInitMessage message)
@@ -665,8 +677,8 @@ namespace FxSsh
         {
             // RFC 4253 7.3: send SSH_MSG_NEWKEYS before applying the new keys.
             // We deliberately send the server's NEWKEYS here (after receiving the
-            // client's NEWKEYS) so that our NEWKEYS data segment piggybacks the
-            // ACK for the client's NEWKEYS. Otherwise the client's NEWKEYS stays
+            // client's NEWKEYS) so that our server's NEWKEYS data segment piggybacks
+            // the ACK for the client's NEWKEYS. Otherwise the client's NEWKEYS stays
             // un-ACKed and Nagle blocks the subsequent SERVICE_REQUEST until the
             // delayed-ACK timer fires (~40ms on Linux).
             SendMessageInternal(new NewKeysMessage());
@@ -681,8 +693,40 @@ namespace FxSsh
                 _exchangeContext = null;
             }
 
+            // RFC 8308 section 2.2: send SSH_MSG_EXT_INFO as the first message
+            // under the new keys, before any blocked messages are flushed.
+            // Only send when the client advertised "ext-info-c" in its KEXINIT.
+            if (_clientAdvertisedExtInfo && _extensionsToSend.Count > 0)
+            {
+                SendMessageInternal(new ExtInfoMessage
+                {
+                    Extensions = new Dictionary<string, string>(_extensionsToSend)
+                });
+            }
+
             ContinueSendBlockedMessages();
             _hasBlockedMessagesWaitHandle.Set();
+        }
+
+        /// <summary>
+        /// Register a protocol extension to advertise via SSH_MSG_EXT_INFO
+        /// (RFC 8308). Call before the first connection is accepted, or at
+        /// session setup. Extensions are sent immediately after NEWKEYS
+        /// during each key exchange when the peer supports ext-info-c.
+        /// </summary>
+        /// <param name="name">Extension name (e.g. "server-sig-algs").</param>
+        /// <param name="value">Extension value (e.g. "ssh-ed25519,rsa-sha2-512").</param>
+        public void RegisterExtension(string name, string value)
+        {
+            _extensionsToSend[name] = value;
+        }
+
+        private void HandleMessage(ExtInfoMessage message)
+        {
+            // RFC 8308 section 2.2: the client sends SSH_MSG_EXT_INFO
+            // right after its NEWKEYS. We do not currently define any
+            // client-to-server extensions to act on; acknowledging receipt
+            // is sufficient for protocol correctness and future compatibility.
         }
 
         private void HandleMessage(UnimplementedMessage message)

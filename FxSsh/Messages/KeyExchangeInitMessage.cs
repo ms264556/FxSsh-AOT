@@ -1,4 +1,6 @@
 ﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -40,6 +42,21 @@ namespace FxSsh.Messages
 
         public uint Reserved { get; set; }
 
+        /// <summary>
+        /// Extension identifiers (RFC 8308) parsed from the reserved area of
+        /// a received KEXINIT (set on the client side). Each remaining byte
+        /// sequence after Reserved is an extension name string.
+        /// This is populated only when parsing a received message; the send
+        /// path uses <see cref="ExtensionNames"/> instead.
+        /// </summary>
+        public HashSet<string> PeerExtensions { get; private set; } = [];
+
+        /// <summary>
+        /// Extension names to include in the sent KEXINIT (e.g. "ext-info-s").
+        /// Set before calling <see cref="OnGetPacket(SshDataWriter)"/>.
+        /// </summary>
+        public HashSet<string> ExtensionNames { get; set; } = [];
+
         public override byte MessageType { get { return MessageNumber; } }
 
         protected override void OnLoad(SshDataReader reader)
@@ -57,6 +74,15 @@ namespace FxSsh.Messages
             LanguagesServerToClient = reader.ReadString(Encoding.ASCII).Split(',');
             FirstKexPacketFollows = reader.ReadBoolean();
             Reserved = reader.ReadUInt32();
+
+            // RFC 8308 section 3.1: after the reserved uint32, remaining bytes
+            // are extension identifiers (each as an SSH name-list = uint32 length + bytes).
+            PeerExtensions = [];
+            while (reader.DataAvailable > 0)
+            {
+                var ext = reader.ReadString(Encoding.ASCII);
+                PeerExtensions.Add(ext);
+            }
         }
 
         protected override void OnGetPacket(SshDataWriter writer)
@@ -74,6 +100,10 @@ namespace FxSsh.Messages
             writer.Write(string.Join(",", LanguagesServerToClient), Encoding.ASCII);
             writer.Write(FirstKexPacketFollows);
             writer.Write(Reserved);
+
+            // RFC 8308: extension names (e.g. "ext-info-s") after reserved.
+            foreach (var ext in ExtensionNames)
+                writer.Write(ext, Encoding.ASCII);
         }
     }
 }
