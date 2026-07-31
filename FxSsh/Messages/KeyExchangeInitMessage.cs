@@ -75,13 +75,19 @@ namespace FxSsh.Messages
             FirstKexPacketFollows = reader.ReadBoolean();
             Reserved = reader.ReadUInt32();
 
-            // RFC 8308 section 3.1: after the reserved uint32, remaining bytes
-            // are extension identifiers (each as an SSH name-list = uint32 length + bytes).
+            // RFC 4253 section 4: reserved is the last field of the KEXINIT
+            // payload. Per RFC 8308, the "ext-info-c" / "ext-info-s" extension
+            // markers are advertised inside the kex_algorithms name-list (NOT
+            // in a trailing name-list after reserved). OpenSSH also appends
+            // "kex-strict-c-v00@openssh.com" to the same list. We therefore
+            // detect extension support from KeyExchangeAlgorithms, and ignore
+            // any trailing bytes after reserved (some clients append a stray
+            // zero byte; RFC 4253 treats the payload as ending at reserved).
             PeerExtensions = [];
-            while (reader.DataAvailable > 0)
+            foreach (var kex in KeyExchangeAlgorithms)
             {
-                var ext = reader.ReadString(Encoding.ASCII);
-                PeerExtensions.Add(ext);
+                if (kex == "ext-info-c" || kex == "ext-info-s")
+                    PeerExtensions.Add(kex);
             }
         }
 
@@ -101,9 +107,9 @@ namespace FxSsh.Messages
             writer.Write(FirstKexPacketFollows);
             writer.Write(Reserved);
 
-            // RFC 8308: extension names (e.g. "ext-info-s") after reserved.
-            foreach (var ext in ExtensionNames)
-                writer.Write(ext, Encoding.ASCII);
+            // RFC 8308: ext-info-s is advertised inside the kex_algorithms
+            // name-list (NOT as a trailing field after reserved). It is
+            // already included via KeyExchangeAlgorithms by the caller.
         }
     }
 }

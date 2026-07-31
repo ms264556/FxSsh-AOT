@@ -51,9 +51,15 @@ namespace FxSsh.Algorithms
 
             for (var i = 0; i < inputCount; i += bytesPerBlock)
             {
+                // CTR is a stream cipher: the final block may be shorter than
+                // the cipher block size (e.g. ETM packets where packet_length
+                // is not encrypted and the encrypted portion is not
+                // block-aligned). Only consume the bytes actually present.
+                var blockLen = Math.Min(bytesPerBlock, inputCount - i);
+
                 written += _transform.TransformBlock(_iv, 0, bytesPerBlock, _block, 0);
 
-                for (var j = 0; j < bytesPerBlock; j++)
+                for (var j = 0; j < blockLen; j++)
                     outputBuffer[outputOffset + i + j] = (byte)(_block[j] ^ inputBuffer[inputOffset + i + j]);
 
                 var k = _iv.Length;

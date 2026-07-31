@@ -93,12 +93,12 @@ namespace FxSsh
             _publicKeyAlgorithms.Add("rsa-sha2-256", x => new RsaKey(256, x));
             _publicKeyAlgorithms.Add("rsa-sha2-512", x => new RsaKey(512, x));
 
-            _encryptionAlgorithms.Add("aes128-ctr", () => new CipherInfo(Aes.Create(), 128, CipherModeEx.CTR));
-            _encryptionAlgorithms.Add("aes192-ctr", () => new CipherInfo(Aes.Create(), 192, CipherModeEx.CTR));
             _encryptionAlgorithms.Add("aes256-ctr", () => new CipherInfo(Aes.Create(), 256, CipherModeEx.CTR));
 
             _hmacAlgorithms.Add("hmac-sha2-256", () => new HmacInfo(new HMACSHA256(), 256));
             _hmacAlgorithms.Add("hmac-sha2-512", () => new HmacInfo(new HMACSHA512(), 512));
+            _hmacAlgorithms.Add("hmac-sha2-256-etm@openssh.com", () => new HmacInfo(new HMACSHA256(), 256, true));
+            _hmacAlgorithms.Add("hmac-sha2-512-etm@openssh.com", () => new HmacInfo(new HMACSHA512(), 512, true));
 
             _compressionAlgorithms.Add("none", () => new NoCompression());
 
@@ -341,34 +341,69 @@ namespace FxSsh
         private Message ReceiveMessage()
         {
             var useAlg = _algorithms != null;
+            var isEtm = useAlg && _algorithms.ClientHmacIsEtm;
+
+            // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT encrypted.
+            // Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
+            if (isEtm)
+            {
+                var lenBuf = SocketRead(4);
+                var packetLength = lenBuf[0] << 24 | lenBuf[1] << 16 | lenBuf[2] << 8 | lenBuf[3];
+                if (packetLength < MinimumPacketLength || packetLength > MaximumSshPacketSize)
+                {
+                    throw new SshConnectionException(
+                        string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
+                            (uint)packetLength, MinimumPacketLength, MaximumSshPacketSize),
+                        DisconnectReason.ProtocolError);
+                }
+
+                // packetLength bytes of ciphertext: padding_length || payload || padding.
+                var cipher = SocketRead(packetLength);
+                var encryptedCopy = cipher[..];
+
+                var clientMac = SocketRead(_algorithms.ClientHmac.DigestLength);
+                var mac = ComputeHmac(_algorithms.ClientHmac, lenBuf, encryptedCopy, _inboundPacketSequence);
+                if (!clientMac.SequenceEqual(mac))
+                {
+                    throw new SshConnectionException("Invalid MAC", DisconnectReason.MacError);
+                }
+
+                _algorithms.ClientEncryption.Transform(cipher, cipher);
+                var paddingLength = cipher[0];
+                var dataLength = packetLength - paddingLength - 1;
+                var data = cipher[1..(1 + dataLength)];
+                data = _algorithms.ClientCompression.Decompress(data).ToArray();
+
+                return LoadMessage(data[0], data, packetLength);
+            }
 
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ClientEncryption.BlockBytesSize) : 8);
             var rawFirst = SocketRead(blockSize);
             if (useAlg)
                 _algorithms.ClientEncryption.Transform(rawFirst, rawFirst);
 
-            var packetLength = rawFirst[0] << 24 | rawFirst[1] << 16 | rawFirst[2] << 8 | rawFirst[3];
-            if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
+            var packetLengthNonEtm = rawFirst[0] << 24 | rawFirst[1] << 16 | rawFirst[2] << 8 | rawFirst[3];
+            if (packetLengthNonEtm < MinimumPacketLength || packetLengthNonEtm > MaximumSshPacketSize)
             {
                 throw new SshConnectionException(
                     string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
-                        (uint)packetLength, MinimumPacketLength, MaximumPacketLength),
+                        (uint)packetLengthNonEtm, MinimumPacketLength, MaximumSshPacketSize),
                     DisconnectReason.ProtocolError);
             }
 
-            var paddingLength = rawFirst[4];
-            var bytesToRead = packetLength - blockSize + 4;
+            var paddingLengthNonEtm = rawFirst[4];
+            var bytesToRead = packetLengthNonEtm - blockSize + 4;
 
             var followingBlocks = SocketRead(bytesToRead);
             if (useAlg && followingBlocks.Length > 0)
                 _algorithms.ClientEncryption.Transform(followingBlocks, followingBlocks);
 
-            var dataLength = packetLength - paddingLength;
-            var data = new byte[dataLength];
-            var fromFirst = Math.Min(dataLength, blockSize - 5);
+            var dataLengthNonEtm = packetLengthNonEtm - paddingLengthNonEtm;
+            var dataNonEtm = new byte[dataLengthNonEtm];
+            var fromFirst = Math.Min(dataLengthNonEtm, blockSize - 5);
             if (fromFirst > 0)
-                Buffer.BlockCopy(rawFirst, 5, data, 0, fromFirst);
-            Buffer.BlockCopy(followingBlocks, 0, data, fromFirst, dataLength - fromFirst);
+                Buffer.BlockCopy(rawFirst, 5, dataNonEtm, 0, fromFirst);
+            Buffer.BlockCopy(followingBlocks, 0, dataNonEtm, fromFirst, dataLengthNonEtm - fromFirst);
 
             if (useAlg)
             {
@@ -379,10 +414,20 @@ namespace FxSsh
                     throw new SshConnectionException("Invalid MAC", DisconnectReason.MacError);
                 }
 
-                data = _algorithms.ClientCompression.Decompress(data).ToArray();
+                dataNonEtm = _algorithms.ClientCompression.Decompress(dataNonEtm).ToArray();
             }
 
-            var typeNumber = data[0];
+            var typeNumber = dataNonEtm[0];
+            return LoadMessage(typeNumber, dataNonEtm, packetLengthNonEtm);
+        }
+
+        /// <summary>
+        /// Convert a decrypted payload into a Message instance, then update
+        /// inbound sequencing and the keepalive idle clock. Shared by the ETM
+        /// and the regular receive paths.
+        /// </summary>
+        private Message LoadMessage(byte typeNumber, byte[] data, int packetLength)
+        {
             var implemented = _messagesMetadata.ContainsKey(typeNumber);
             var message = implemented
                 ? (Message)Activator.CreateInstance(_messagesMetadata[typeNumber])
@@ -436,9 +481,24 @@ namespace FxSsh
             // the total length of (packet_length || padding_length || payload || padding)
             // is a multiple of the cipher block size or 8,
             // padding length must between 4 and 255 bytes.
-            var paddingLength = (byte)(blockSize - (payload.Length + 5) % blockSize);
-            if (paddingLength < 4)
-                paddingLength += blockSize;
+            //
+            // OpenSSH ETM (RFC 6668) differs: packet_length is transmitted in
+            // plaintext and the peer validates it immediately, so the padding
+            // must make packet_length itself a multiple of the block size
+            // (packet_length = payload.Length + padding + 1).
+            byte paddingLength;
+            if (useAlg && _algorithms.ServerHmacIsEtm)
+            {
+                paddingLength = (byte)(blockSize - (payload.Length + 1) % blockSize);
+                if (paddingLength < 4)
+                    paddingLength += blockSize;
+            }
+            else
+            {
+                paddingLength = (byte)(blockSize - (payload.Length + 5) % blockSize);
+                if (paddingLength < 4)
+                    paddingLength += blockSize;
+            }
 
             var packetLength = (uint)payload.Length + paddingLength + 1;
 
@@ -454,11 +514,34 @@ namespace FxSsh
 
             if (useAlg)
             {
-                var mac = ComputeHmac(_algorithms.ServerHmac, payload, Array.Empty<byte>(), _outboundPacketSequence);
-                var encrypted = new byte[payload.Length + mac.Length];
-                _algorithms.ServerEncryption.Transform(payload, encrypted);
-                Buffer.BlockCopy(mac, 0, encrypted, payload.Length, mac.Length);
-                payload = encrypted;
+                var macLength = _algorithms.ServerHmac.DigestLength;
+
+                if (_algorithms.ServerHmacIsEtm)
+                {
+                    // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT
+                    // encrypted. Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
+                    // MAC covers seq || length || ciphertext.
+                    var cipherLen = payload.Length - 4;
+                    var encrypted = new byte[cipherLen + macLength];
+                    _algorithms.ServerEncryption.Transform(payload[4..], encrypted);
+
+                    var mac = ComputeHmac(_algorithms.ServerHmac, payload[..4], encrypted[..cipherLen], _outboundPacketSequence);
+
+                    var packet = new byte[4 + cipherLen + macLength];
+                    Buffer.BlockCopy(payload, 0, packet, 0, 4);
+                    Buffer.BlockCopy(encrypted, 0, packet, 4, cipherLen);
+                    Buffer.BlockCopy(mac, 0, packet, 4 + cipherLen, macLength);
+                    payload = packet;
+                }
+                else
+                {
+                    // RFC 4253: the whole packet is encrypted; MAC covers the plaintext.
+                    var encrypted = new byte[payload.Length + macLength];
+                    _algorithms.ServerEncryption.Transform(payload, encrypted);
+                    var mac = ComputeHmac(_algorithms.ServerHmac, payload, Array.Empty<byte>(), _outboundPacketSequence);
+                    Buffer.BlockCopy(mac, 0, encrypted, payload.Length, mac.Length);
+                    payload = encrypted;
+                }
             }
 
             SocketWrite(payload);
@@ -525,13 +608,13 @@ namespace FxSsh
 
         private Message LoadKexInitMessage()
         {
-            // RFC 8308: advertise ext-info-s so that the client knows
-            // we are willing to receive SSH_MSG_EXT_INFO.
-            var extNames = new HashSet<string> { "ext-info-s" };
+            // RFC 8308: advertise "ext-info-s" inside the kex_algorithms
+            // name-list so the client knows we accept SSH_MSG_EXT_INFO.
+            var kexAlgs = new List<string>(_keyExchangeAlgorithms.Keys) { "ext-info-s" };
 
             var message = new KeyExchangeInitMessage
             {
-                KeyExchangeAlgorithms = [.. _keyExchangeAlgorithms.Keys],
+                KeyExchangeAlgorithms = kexAlgs.ToArray(),
                 ServerHostKeyAlgorithms = _publicKeyAlgorithms.Keys.Intersect(_hostKey.Keys).ToArray(),
                 EncryptionAlgorithmsClientToServer = [.. _encryptionAlgorithms.Keys],
                 EncryptionAlgorithmsServerToClient = [.. _encryptionAlgorithms.Keys],
@@ -543,7 +626,6 @@ namespace FxSsh
                 LanguagesServerToClient = [""],
                 FirstKexPacketFollows = false,
                 Reserved = 0,
-                ExtensionNames = extNames,
             };
 
             return message;
@@ -956,6 +1038,8 @@ namespace FxSsh
                 ServerHmac = serverHmac.Hmac(serverHmacKey),
                 ClientCompression = _compressionAlgorithms[_exchangeContext.ClientCompression](),
                 ServerCompression = _compressionAlgorithms[_exchangeContext.ServerCompression](),
+                ClientHmacIsEtm = clientHmac.IsEtm,
+                ServerHmacIsEtm = serverHmac.IsEtm,
             };
 
             return algorithms;
@@ -1036,6 +1120,8 @@ namespace FxSsh
             public HmacAlgorithm ServerHmac;
             public CompressionAlgorithm ClientCompression;
             public CompressionAlgorithm ServerCompression;
+            public bool ClientHmacIsEtm;
+            public bool ServerHmacIsEtm;
         }
 
         private class ExchangeContext
