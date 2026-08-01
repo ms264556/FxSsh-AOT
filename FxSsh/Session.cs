@@ -94,6 +94,8 @@ namespace FxSsh
             _publicKeyAlgorithms.Add("rsa-sha2-512", x => new RsaKey(512, x));
 
             _encryptionAlgorithms.Add("aes256-ctr", () => new CipherInfo(Aes.Create(), 256, CipherModeEx.CTR));
+            _encryptionAlgorithms.Add("aes256-gcm@openssh.com", () => new CipherInfo(256));
+            _encryptionAlgorithms.Add("aes128-gcm@openssh.com", () => new CipherInfo(128));
 
             _hmacAlgorithms.Add("hmac-sha2-256", () => new HmacInfo(new HMACSHA256(), 256));
             _hmacAlgorithms.Add("hmac-sha2-512", () => new HmacInfo(new HMACSHA512(), 512));
@@ -342,6 +344,51 @@ namespace FxSsh
         {
             var useAlg = _algorithms != null;
             var isEtm = useAlg && _algorithms.ClientHmacIsEtm;
+            var isAead = useAlg && _algorithms.ClientEncryption.IsAead;
+
+            // AEAD (RFC 5647 section 3): layout [packet_length(4, plaintext)][ciphertext][tag(16)].
+            // packet_length is plaintext (same as ETM) but covers only the
+            // ciphertext portion — NOT the tag. The GCM tag replaces the HMAC
+            // and authenticates the ciphertext (the plaintext length field is
+            // validated separately as bounded by MaximumPacketLength).
+            if (isAead)
+            {
+                var lenBuf = SocketRead(4);
+                var packetLength = lenBuf[0] << 24 | lenBuf[1] << 16 | lenBuf[2] << 8 | lenBuf[3];
+                if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
+                {
+                    throw new SshConnectionException(
+                        string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
+                            (uint)packetLength, MinimumPacketLength, MaximumPacketLength),
+                        DisconnectReason.ProtocolError);
+                }
+
+                // packetLength bytes of ciphertext: padding_length || payload || padding,
+                // followed by the 16-byte GCM tag. Per RFC 5647 section 7.3 the 4-byte
+                // plaintext packet_length (lenBuf) is GCM's Additional Authenticated
+                // Data — authenticated but not encrypted, covered by the tag.
+                var tagLength = _algorithms.ClientEncryption.TagBytes;
+                var ciphertextWithTag = SocketRead(packetLength + tagLength);
+
+                byte[] decrypted;
+                try
+                {
+                    decrypted = _algorithms.ClientEncryption.DecryptAead(lenBuf, ciphertextWithTag[..(packetLength + tagLength)]);
+                }
+                catch (CryptographicException)
+                {
+                    // GCM tag mismatch is the AEAD equivalent of an HMAC failure —
+                    // RFC 4253 §6.4 mandates connection termination with MAC_ERROR.
+                    throw new SshConnectionException("Invalid AEAD tag", DisconnectReason.MacError);
+                }
+
+                var paddingLength = decrypted[0];
+                var dataLength = packetLength - paddingLength - 1;
+                var data = decrypted[1..(1 + dataLength)];
+                data = _algorithms.ClientCompression.Decompress(data).ToArray();
+
+                return LoadMessage(data[0], data, packetLength);
+            }
 
             // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT encrypted.
             // Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
@@ -470,6 +517,7 @@ namespace FxSsh
         private void SendMessageInternal(Message message)
         {
             var useAlg = _algorithms != null;
+            var isAead = useAlg && _algorithms.ServerEncryption.IsAead;
 
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ServerEncryption.BlockBytesSize) : 8);
             var payload = message.GetPacket();
@@ -482,12 +530,12 @@ namespace FxSsh
             // is a multiple of the cipher block size or 8,
             // padding length must between 4 and 255 bytes.
             //
-            // OpenSSH ETM (RFC 6668) differs: packet_length is transmitted in
-            // plaintext and the peer validates it immediately, so the padding
-            // must make packet_length itself a multiple of the block size
-            // (packet_length = payload.Length + padding + 1).
+            // OpenSSH ETM (RFC 6668) and AEAD (RFC 5647) both transmit
+            // packet_length in plaintext and the peer validates it immediately,
+            // so the padding must make packet_length itself a multiple of the
+            // block size (packet_length = payload.Length + padding + 1).
             byte paddingLength;
-            if (useAlg && _algorithms.ServerHmacIsEtm)
+            if (useAlg && (_algorithms.ServerHmacIsEtm || isAead))
             {
                 paddingLength = (byte)(blockSize - (payload.Length + 1) % blockSize);
                 if (paddingLength < 4)
@@ -514,13 +562,29 @@ namespace FxSsh
 
             if (useAlg)
             {
-                var macLength = _algorithms.ServerHmac.DigestLength;
+                if (isAead)
+                {
+                    // RFC 5647 section 3 + 7.3 AEAD layout:
+                    // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
+                    // No separate MAC — the GCM tag is the authenticator. Per
+                    // RFC 5647 section 7.3 the 4-byte plaintext packet_length is fed to
+                    // GCM as Additional Authenticated Data (authenticated but not
+                    // encrypted), so it is covered by the tag. OpenSSH/OpenSSL
+                    // does exactly this in cipher.c (EVP_Cipher with aadlen=4).
+                    var cipherLen = payload.Length - 4;
+                    var ciphertextWithTag = _algorithms.ServerEncryption.EncryptAead(payload[..4], payload[4..]);
 
-                if (_algorithms.ServerHmacIsEtm)
+                    var packet = new byte[4 + ciphertextWithTag.Length];
+                    Buffer.BlockCopy(payload, 0, packet, 0, 4);
+                    Buffer.BlockCopy(ciphertextWithTag, 0, packet, 4, ciphertextWithTag.Length);
+                    payload = packet;
+                }
+                else if (_algorithms.ServerHmacIsEtm)
                 {
                     // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT
                     // encrypted. Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
                     // MAC covers seq || length || ciphertext.
+                    var macLength = _algorithms.ServerHmac.DigestLength;
                     var cipherLen = payload.Length - 4;
                     var encrypted = new byte[cipherLen + macLength];
                     _algorithms.ServerEncryption.Transform(payload[4..], encrypted);
@@ -536,6 +600,7 @@ namespace FxSsh
                 else
                 {
                     // RFC 4253: the whole packet is encrypted; MAC covers the plaintext.
+                    var macLength = _algorithms.ServerHmac.DigestLength;
                     var encrypted = new byte[payload.Length + macLength];
                     _algorithms.ServerEncryption.Transform(payload, encrypted);
                     var mac = ComputeHmac(_algorithms.ServerHmac, payload, Array.Empty<byte>(), _outboundPacketSequence);
@@ -1021,21 +1086,46 @@ namespace FxSsh
 
         private Algorithms ComputeEncryption(KexAlgorithm kexAlg, PublicKeyAlgorithm hostKeyAlg, byte[] exchangeHash, CipherInfo clientCipher, CipherInfo serverCipher, HmacInfo clientHmac, HmacInfo serverHmac, byte[] sharedSecret)
         {
-            var clientCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.BlockSize >> 3, sharedSecret, 'A');
-            var serverCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.BlockSize >> 3, sharedSecret, 'B');
+            // IV length is algorithm-specific: AES-CBC/CTR use a full block (16
+            // bytes), AES-GCM uses the 4-byte fixed_iv (RFC 5647 section 7.1). The
+            // remaining 8 bytes of the GCM nonce are a per-packet counter owned
+            // by GcmModeCryptoTransform.
+            var clientCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.IVSize, sharedSecret, 'A');
+            var serverCipherIV = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.IVSize, sharedSecret, 'B');
             var clientCipherKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientCipher.KeySize >> 3, sharedSecret, 'C');
             var serverCipherKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverCipher.KeySize >> 3, sharedSecret, 'D');
-            var clientHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientHmac.KeySize >> 3, sharedSecret, 'E');
-            var serverHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverHmac.KeySize >> 3, sharedSecret, 'F');
+
+            var clientEncryption = clientCipher.Cipher(clientCipherKey, clientCipherIV, false);
+            var serverEncryption = serverCipher.Cipher(serverCipherKey, serverCipherIV, true);
+
+            // AEAD (GCM) replaces the separate HMAC with an inline auth tag.
+            // RFC 5647 section 6: the negotiated MAC name is still carried in KEX_INIT
+            // and the MAC key is still derived for compatibility, but it MUST NOT
+            // be used to authenticate packets — the GCM tag does that. We skip
+            // deriving the MAC key for the AEAD direction entirely (nothing reads
+            // ClientHmac/ServerHmac when the corresponding cipher IsAead), and
+            // leave the HmacAlgorithm slots null so any accidental use fails loud.
+            HmacAlgorithm clientHmacAlg = null;
+            HmacAlgorithm serverHmacAlg = null;
+            if (!clientEncryption.IsAead)
+            {
+                var clientHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, clientHmac.KeySize >> 3, sharedSecret, 'E');
+                clientHmacAlg = clientHmac.Hmac(clientHmacKey);
+            }
+            if (!serverEncryption.IsAead)
+            {
+                var serverHmacKey = ComputeEncryptionKey(kexAlg, exchangeHash, serverHmac.KeySize >> 3, sharedSecret, 'F');
+                serverHmacAlg = serverHmac.Hmac(serverHmacKey);
+            }
 
             var algorithms = new Algorithms
             {
                 KeyExchange = kexAlg,
                 PublicKey = hostKeyAlg,
-                ClientEncryption = clientCipher.Cipher(clientCipherKey, clientCipherIV, false),
-                ServerEncryption = serverCipher.Cipher(serverCipherKey, serverCipherIV, true),
-                ClientHmac = clientHmac.Hmac(clientHmacKey),
-                ServerHmac = serverHmac.Hmac(serverHmacKey),
+                ClientEncryption = clientEncryption,
+                ServerEncryption = serverEncryption,
+                ClientHmac = clientHmacAlg,
+                ServerHmac = serverHmacAlg,
                 ClientCompression = _compressionAlgorithms[_exchangeContext.ClientCompression](),
                 ServerCompression = _compressionAlgorithms[_exchangeContext.ServerCompression](),
                 ClientHmacIsEtm = clientHmac.IsEtm,

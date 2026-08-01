@@ -17,8 +17,10 @@ FxSsh adheres to the following RFC documents
 - [RFC4253](https://tools.ietf.org/html/rfc4253)  Transport Layer Protocol
 - [RFC4254](https://tools.ietf.org/html/rfc4254)  Connection Protocol
 - [RFC4344](https://tools.ietf.org/html/rfc4344)  Transport Layer Encryption Modes
+- [RFC5647](https://tools.ietf.org/html/rfc5647)  AES Galois Counter Mode for the Secure Shell Transport Layer Protocol
 - [RFC5656](https://tools.ietf.org/html/rfc5656)  Elliptic Curve Algorithm Integration
 - [RFC6668](https://tools.ietf.org/html/rfc6668)  SHA-2 Data Integrity Algorithms
+- [RFC8308](https://tools.ietf.org/html/rfc8308)  Extension Negotiation in the Secure Shell (SSH) Protocol
 - [RFC8332](https://tools.ietf.org/html/rfc8332)  Use of RSA Keys with SHA-2
 - [draft-ietf-secsh-filexfer-02](https://tools.ietf.org/html/draft-ietf-secsh-filexfer-02)  SSH File Transfer Protocol (sftp version 3)
 
@@ -28,15 +30,16 @@ FxSsh adheres to the following RFC documents
 |-----------------------|-------------------------------------------------------------------------------|
 | **Public Key**        | RSA family: `rsa-sha2-256`, `rsa-sha2-512`<br>ECDsa family: `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521` |
 | **Key Exchange (KEX)**| DH family: `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group18-sha512`<br>ECDH family: `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521` |
-| **Encryption**        | `aes128-ctr`, `aes192-ctr`, `aes256-ctr`                                      |
-| **MAC**               | `hmac-sha2-256`, `hmac-sha2-512`                                              |
+| **Encryption**        | `aes256-ctr`, `aes128-gcm@openssh.com`, `aes256-gcm@openssh.com` |
+| **MAC**               | `hmac-sha2-256`, `hmac-sha2-512`, `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com` |
+| **Compression**       | `none`                                                                        |
 
 ### Supported Services
 
 | **Service**        | **Details**                                                             |
 |--------------------|-------------------------------------------------------------------------|
-| **Authentication** | `publickey`, `password`                                                 |
-| **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`<br>`tcpip-forward` / `cancel-tcpip-forward` (reverse port forwarding)      |
+| **Authentication** | `publickey`, `password`<br>`none` (optional, opt-in via `EnableNoneAuth`)          |
+| **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`<br>`tcpip-forward` / `cancel-tcpip-forward` (reverse port forwarding)<br>`keepalive@openssh.com` (global request) |
 | **subsystem**      | `sftp (version 3)`                                                      |
 
 ### Tested Clients
