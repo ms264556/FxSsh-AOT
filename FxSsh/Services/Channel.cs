@@ -246,7 +246,27 @@ namespace FxSsh.Services
         private void ServerAttemptAdjustWindow(uint messageLength)
         {
             ServerWindowSize -= messageLength;
-            if (ServerWindowSize <= ServerMaxPacketSize)
+
+            // RFC 4254 §5.3: the local window advertised to the peer is topped
+            // up by sending SSH_MSG_CHANNEL_WINDOW_ADJUST before the peer's send
+            // window would otherwise stall. The exact refresh point is an
+            // implementation choice; the only hard constraint is that the peer
+            // must always have at least one maximum-sized packet worth of credit
+            // available until EOF (otherwise it blocks mid-transfer).
+            //
+            // We refresh when the remaining window drops below HALF of the
+            // initial window rather than below one max-packet (ServerMaxPacketSize).
+            // With InitialLocalWindowSize = 1 MiB and ServerMaxPacketSize = 32 KiB,
+            // the previous "<= ServerMaxPacketSize" threshold refreshed roughly
+            // every 64 inbound ~16 KiB packets; the half-window threshold refreshes
+            // roughly every 32 packets, which halves how often the SSH receive
+            // thread is synchronously interrupted to encrypt + transmit a
+            // WINDOW_ADJUST message. Because 1/2 initial (512 KiB) is still far
+            // above ServerMaxPacketSize (32 KiB), the peer can always send a
+            // full-size packet between refreshes — the RFC 4254 hard constraint
+            // stays satisfied. BytesToAdd tops the window back up to the initial
+            // size, matching the RFC's "top up" semantics.
+            if (ServerWindowSize < ServerInitialWindowSize / 2)
             {
                 _connectionService._session.SendMessage(new ChannelWindowAdjustMessage
                 {

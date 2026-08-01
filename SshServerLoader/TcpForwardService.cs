@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Sockets;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SshServerLoader
@@ -11,16 +13,15 @@ namespace SshServerLoader
         private Socket _socket;
         private string _host;
         private int _port;
-        private bool _connected;
-        private List<byte> _blocked;
+        private readonly BlockingCollection<byte[]> _sendQueue = [];
+        private readonly CancellationTokenSource _cts = new();
+        private bool _closed;
 
         public TcpForwardService(string host, int port, string originatorIP, int originatorPort)
         {
             _socket = new Socket(SocketType.Stream, ProtocolType.Tcp);
             _host = host;
             _port = port;
-            _connected = false;
-            _blocked = new List<byte>();
         }
 
         public event EventHandler<byte[]> DataReceived;
@@ -41,23 +42,18 @@ namespace SshServerLoader
             });
         }
 
+        /// <summary>
+        /// Called on the SSH ConnectionService.MessageLoop thread. Must never
+        /// block that thread: the SSH receive loop and window adjustments share
+        /// it, so a blocking socket send here would stall the peer's upload
+        /// (its send window is replenished by the same thread). Instead the
+        /// data is queued and flushed by a dedicated send thread.
+        /// </summary>
         public void OnData(byte[] data)
         {
             try
             {
-                if (_connected)
-                {
-                    if (_blocked.Count > 0)
-                    {
-                        _socket.Send(_blocked.ToArray());
-                        _blocked.Clear();
-                    }
-                    _socket.Send(data);
-                }
-                else
-                {
-                    _blocked.AddRange(data);
-                }
+                _sendQueue.Add(data);
             }
             catch
             {
@@ -77,8 +73,11 @@ namespace SshServerLoader
         private void MessageLoop()
         {
             _socket.Connect(_host, _port);
-            _connected = true;
-            OnData(new byte[0]);
+
+            // Dedicated send thread: serializes socket.Send so the SSH
+            // MessageLoop thread never blocks on the local TCP peer.
+            Task.Run(SendLoop);
+
             var bytes = new byte[1024 * 64];
             while (true)
             {
@@ -92,6 +91,34 @@ namespace SshServerLoader
                 DataReceived?.Invoke(this, data);
             }
             CloseReceived?.Invoke(this, EventArgs.Empty);
+            Finish();
+        }
+
+        private void SendLoop()
+        {
+            try
+            {
+                foreach (var data in _sendQueue.GetConsumingEnumerable(_cts.Token))
+                {
+                    if (data.Length == 0)
+                        continue;
+                    _socket.Send(data);
+                }
+            }
+            catch
+            {
+                // Socket closed or canceled; nothing to do.
+            }
+        }
+
+        private void Finish()
+        {
+            if (_closed)
+                return;
+            _closed = true;
+
+            _cts.Cancel();
+            try { _socket.Close(); } catch { }
         }
     }
 }

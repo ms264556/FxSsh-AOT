@@ -112,13 +112,37 @@ namespace FxSsh.Services
             lock (_bridgeLocker)
                 _bridges.Add((channel, socket));
 
+            // The channel DataReceived callback runs on the SSH
+            // ConnectionService.MessageLoop thread. It must never block there:
+            // the same thread also sends the peer's window adjustments, so a
+            // blocking socket.Send would stall the peer's upload (its send
+            // window is replenished by this thread). Queue the data instead
+            // and let a dedicated send thread serialize socket.Send.
+            var sendQueue = new System.Collections.Concurrent.BlockingCollection<byte[]>();
+            Task.Run(() =>
+            {
+                try
+                {
+                    foreach (var data in sendQueue.GetConsumingEnumerable())
+                    {
+                        try { if (socket.Connected) socket.Send(data); } catch { }
+                    }
+                }
+                catch { }
+            });
+
             channel.DataReceived += (_, data) =>
             {
-                try { if (socket.Connected) socket.Send(data); } catch { }
+                try { sendQueue.Add(data); } catch { }
             };
             channel.CloseReceived += (_, _) =>
             {
-                try { if (socket.Connected) socket.Shutdown(SocketShutdown.Send); } catch { }
+                try
+                {
+                    sendQueue.CompleteAdding();
+                    if (socket.Connected) socket.Shutdown(SocketShutdown.Send);
+                }
+                catch { }
             };
 
             // Socket → channel pump.

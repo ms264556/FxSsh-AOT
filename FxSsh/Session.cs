@@ -349,11 +349,11 @@ namespace FxSsh
             {
                 var lenBuf = SocketRead(4);
                 var packetLength = lenBuf[0] << 24 | lenBuf[1] << 16 | lenBuf[2] << 8 | lenBuf[3];
-                if (packetLength < MinimumPacketLength || packetLength > MaximumSshPacketSize)
+                if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
                 {
                     throw new SshConnectionException(
                         string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
-                            (uint)packetLength, MinimumPacketLength, MaximumSshPacketSize),
+                            (uint)packetLength, MinimumPacketLength, MaximumPacketLength),
                         DisconnectReason.ProtocolError);
                 }
 
@@ -383,11 +383,11 @@ namespace FxSsh
                 _algorithms.ClientEncryption.Transform(rawFirst, rawFirst);
 
             var packetLengthNonEtm = rawFirst[0] << 24 | rawFirst[1] << 16 | rawFirst[2] << 8 | rawFirst[3];
-            if (packetLengthNonEtm < MinimumPacketLength || packetLengthNonEtm > MaximumSshPacketSize)
+            if (packetLengthNonEtm < MinimumPacketLength || packetLengthNonEtm > MaximumPacketLength)
             {
                 throw new SshConnectionException(
                     string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
-                        (uint)packetLengthNonEtm, MinimumPacketLength, MaximumSshPacketSize),
+                        (uint)packetLengthNonEtm, MinimumPacketLength, MaximumPacketLength),
                     DisconnectReason.ProtocolError);
             }
 
