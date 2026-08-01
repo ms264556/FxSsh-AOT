@@ -30,6 +30,24 @@ namespace FxSsh.Messages
             return writer.ToByteArray();
         }
 
+        /// <summary>
+        /// Write this message's payload (MessageType + fields) directly into
+        /// <paramref name="writer"/>. This is the zero-intermediate-array
+        /// counterpart of <see cref="GetPacket"/>: the caller already owns
+        /// the writer (typically backed by a pooled buffer) and is going to
+        /// frame it with packet_length/padding_length itself, so we avoid
+        /// the round-trip through an intermediate <c>byte[]</c> payload.
+        ///
+        /// The writer is not disposed here — the caller disposes it once it
+        /// has finished framing.
+        /// </summary>
+        public void WritePayload(SshDataWriter writer)
+        {
+            ArgumentNullException.ThrowIfNull(writer);
+            writer.Write(MessageType);
+            OnGetPacket(writer);
+        }
+
         public static T LoadFrom<T>(Message message) where T : Message, new()
         {
             ArgumentNullException.ThrowIfNull(message);

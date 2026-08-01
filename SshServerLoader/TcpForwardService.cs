@@ -24,6 +24,11 @@ namespace SshServerLoader
             _port = port;
         }
 
+        // DataReceived fires on the local socket→channel pump thread and
+        // feeds Channel.SendData, which now takes ReadOnlyMemory<byte>. A
+        // byte[] is implicitly convertible to ReadOnlyMemory<byte>, so keep
+        // the event payload as byte[] — the own-socket read buffer is the
+        // producer's to manage, and the channel slicing is zero-copy.
         public event EventHandler<byte[]> DataReceived;
         public event EventHandler CloseReceived;
 
@@ -49,11 +54,12 @@ namespace SshServerLoader
         /// (its send window is replenished by the same thread). Instead the
         /// data is queued and flushed by a dedicated send thread.
         /// </summary>
-        public void OnData(byte[] data)
+        /// <param name="data">Slice over the SSH receive buffer; the send thread runs asynchronously so we copy it into the queue rather than retain the slice past the callback's return.</param>
+        public void OnData(ReadOnlyMemory<byte> data)
         {
             try
             {
-                _sendQueue.Add(data);
+                _sendQueue.Add(data.ToArray());
             }
             catch
             {

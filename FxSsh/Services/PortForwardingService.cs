@@ -118,6 +118,14 @@ namespace FxSsh.Services
             // blocking socket.Send would stall the peer's upload (its send
             // window is replenished by this thread). Queue the data instead
             // and let a dedicated send thread serialize socket.Send.
+            //
+            // The incoming ReadOnlyMemory is a slice over the SSH receive
+            // buffer, which is recycled by the next ReceiveMessage on the
+            // message-loop thread. The send thread runs asynchronously, so
+            // we MUST hand it an independent copy (ToArray) — the slice is
+            // not guaranteed live past the callback's return. This is the one
+            // unavoidable copy on the inbound forwarding path, and it lives
+            // exactly until socket.Send consumes it, then is GC'd.
             var sendQueue = new System.Collections.Concurrent.BlockingCollection<byte[]>();
             Task.Run(() =>
             {
@@ -133,7 +141,7 @@ namespace FxSsh.Services
 
             channel.DataReceived += (_, data) =>
             {
-                try { sendQueue.Add(data); } catch { }
+                try { sendQueue.Add(data.ToArray()); } catch { }
             };
             channel.CloseReceived += (_, _) =>
             {

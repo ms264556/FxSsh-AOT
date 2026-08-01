@@ -78,12 +78,19 @@ namespace SshServerLoader
             _rootPath = Path.GetFullPath(rootPath + Path.DirectorySeparatorChar);
         }
 
-        public void OnData(byte[] data)
+        public void OnData(ReadOnlyMemory<byte> data)
         {
+            // The incoming slice is over the SSH receive buffer, which is
+            // recycled by the next ReceiveMessage. SFTP frames may span
+            // multiple SSH packets (we accumulate into _pandingBytes), so
+            // we MUST materialise an independent copy here — keeping the
+            // slice would alias garbage once the message loop re-reads.
+            // This is the one mandatory copy on the SFTP inbound path.
+            var bytes = data.ToArray();
             if (_pandingBytes == null)
-                _pandingBytes = data;
+                _pandingBytes = bytes;
             else
-                _pandingBytes = [.. _pandingBytes, .. data];
+                _pandingBytes = [.. _pandingBytes, .. bytes];
 
             var reader = new SshDataReader(_pandingBytes);
             var length = (int)reader.ReadUInt32() + 4;

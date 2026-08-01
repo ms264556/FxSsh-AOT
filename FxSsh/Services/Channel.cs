@@ -86,22 +86,20 @@ namespace FxSsh.Services
         public uint PeerMaximumPacketSize { get; private set; }
 
         /// <summary>Queued outbound bytes produced before OPEN_CONFIRMATION arrives.</summary>
-        private readonly System.Collections.Generic.List<byte[]> _pendingSends = [];
+        private readonly System.Collections.Generic.List<ReadOnlyMemory<byte>> _pendingSends = [];
 
         public bool ClientClosed { get; private set; }
         public bool ClientMarkedEof { get; private set; }
         public bool ServerClosed { get; private set; }
         public bool ServerMarkedEof { get; private set; }
 
-        public event EventHandler<byte[]> DataReceived;
+        public event EventHandler<ReadOnlyMemory<byte>> DataReceived;
         public event EventHandler EofReceived;
         public event EventHandler CloseReceived;
         public event EventHandler<WindowChangeArgs> WindowChange;
 
-        public void SendData(byte[] data)
+        public void SendData(ReadOnlyMemory<byte> data)
         {
-            ArgumentNullException.ThrowIfNull(data);
-
             if (data.Length == 0)
             {
                 return;
@@ -109,9 +107,15 @@ namespace FxSsh.Services
 
             // Server-initiated channels buffer outbound bytes until the peer's
             // OPEN_CONFIRMATION resolves ClientChannelId and the peer window.
+            // Slice the caller's memory instead of Clone() — ReadOnlyMemory<byte>
+            // is a by-value view over the caller's buffer, safe to retain only
+            // if the caller guarantees the buffer outlives the flush. Downstream
+            // services hand us bytes they themselves own for the channel's
+            // lifetime (terminal pipes, tcp sockets, sftp), so a slice here is
+            // safe without a copy.
             if (PendingConfirmation)
             {
-                _pendingSends.Add((byte[])data.Clone());
+                _pendingSends.Add(data);
                 return;
             }
 
@@ -120,7 +124,6 @@ namespace FxSsh.Services
 
             var total = (uint)data.Length;
             var offset = 0L;
-            byte[] buf = null;
             do
             {
                 uint packetSize;
@@ -137,11 +140,11 @@ namespace FxSsh.Services
                     continue;
                 }
 
-                if (buf == null || packetSize != buf.Length)
-                    buf = new byte[packetSize];
-                Array.Copy(data, offset, buf, 0, packetSize);
-
-                msg.Data = buf;
+                // Zero-copy slice: ChannelDataMessage.Data is now a
+                // ReadOnlyMemory<byte>, so framing the per-packet chunk is just
+                // a view over the caller's buffer — no new byte[packetSize]
+                // and no Array.Copy per chunk (was the E hot-path allocation).
+                msg.Data = data.Slice((int)offset, (int)packetSize);
                 _connectionService._session.SendMessage(msg);
 
                 total -= packetSize;
@@ -201,10 +204,8 @@ namespace FxSsh.Services
             CheckBothClosed();
         }
 
-        internal void OnData(byte[] data)
+        internal void OnData(ReadOnlyMemory<byte> data)
         {
-            ArgumentNullException.ThrowIfNull(data);
-
             ServerAttemptAdjustWindow((uint)data.Length);
 
             DataReceived?.Invoke(this, data);

@@ -83,46 +83,90 @@ namespace FxSsh.Algorithms
         public byte[] Transform(byte[] input)
         {
             var output = new byte[input.Length];
-            Transform(input, output);
+            Transform(input, input.Length, output);
             return output;
         }
 
         /// <summary>CTR/CBC streaming encrypt/decrypt (not valid for GCM).</summary>
         public void Transform(byte[] input, byte[] output)
         {
-            if (_transform == null)
-                throw new InvalidOperationException("Transform is only valid for CBC/CTR; use EncryptAead/DecryptAead for GCM.");
-            _transform.TransformBlock(input, 0, input.Length, output, 0);
+            Transform(input, input.Length, output);
         }
 
         /// <summary>
-        /// AEAD encrypt one SSH packet. <paramref name="aad"/> is the 4-byte
-        /// plaintext packet_length (RFC 5647 section 7.3 — authenticated but not
-        /// encrypted); <paramref name="plaintext"/> is padding_length ||
-        /// payload || padding. Returns ciphertext || tag, ready to follow the
-        /// plaintext packet_length in the on-wire layout
+        /// CTR/CBC streaming encrypt/decrypt over exactly
+        /// <paramref name="inputLength"/> bytes (not valid for GCM).
+        ///
+        /// <paramref name="inputLength"/> may be smaller than
+        /// <paramref name="input"/>.Length — callers that hold a pooled buffer
+        /// larger than the actual packet MUST pass the exact byte count:
+        /// ICryptoTransform.TransformBlock processes the entire supplied
+        /// count, and the CTR implementation advances its keystream counter
+        /// by exactly that many bytes. Feeding it a rented buffer's full
+        /// length would over-advance the counter and corrupt every subsequent
+        /// packet's decryption.
+        /// </summary>
+        public void Transform(byte[] input, int inputLength, byte[] output)
+        {
+            Transform(input, 0, inputLength, output, 0);
+        }
+
+        /// <summary>
+        /// CTR/CBC streaming encrypt/decrypt over exactly
+        /// <paramref name="inputLength"/> bytes starting at
+        /// <paramref name="inputOffset"/>, writing to <paramref name="outputOffset"/>
+        /// (not valid for GCM). Supports in-place use (input == output), which
+        /// the ETM send path exploits to encrypt the packet body at [4..]
+        /// without a scratch array.
+        /// </summary>
+        public void Transform(byte[] input, int inputOffset, int inputLength, byte[] output, int outputOffset)
+        {
+            if (_transform == null)
+                throw new InvalidOperationException("Transform is only valid for CBC/CTR; use EncryptAead/DecryptAead for GCM.");
+            if (inputLength < 0 || inputOffset < 0 || inputLength > input.Length - inputOffset)
+                throw new ArgumentOutOfRangeException(nameof(inputLength));
+            if (outputOffset < 0 || inputLength > output.Length - outputOffset)
+                throw new ArgumentOutOfRangeException(nameof(outputOffset));
+            _transform.TransformBlock(input, inputOffset, inputLength, output, outputOffset);
+        }
+
+        /// <summary>
+        /// AEAD encrypt one SSH packet straight into <paramref name="destination"/>:
+        /// <paramref name="aad"/> is the 4-byte plaintext packet_length (RFC 5647
+        /// section 7.3 - authenticated but not encrypted); <paramref name="plaintext"/>
+        /// is padding_length || payload || padding. Writes ciphertext || tag,
+        /// ready to follow the plaintext packet_length in the on-wire layout
         /// [packet_length(4)][ciphertext][tag]. Caller must advance the
         /// outbound packet sequence separately (Session does so after the write).
+        ///
+        /// <paramref name="destination"/> must be at least
+        /// <paramref name="plaintext"/>.Length + TagBytes long. No intermediate
+        /// allocation on the hot path.
         /// </summary>
-        public byte[] EncryptAead(byte[] aad, byte[] plaintext)
+        public void EncryptAead(ReadOnlySpan<byte> aad, ReadOnlySpan<byte> plaintext, Span<byte> destination)
         {
             if (_gcmTransform == null)
                 throw new InvalidOperationException("EncryptAead is only valid for GCM.");
-            return _gcmTransform.Encrypt(aad, plaintext);
+            _gcmTransform.Encrypt(aad, plaintext, destination);
         }
 
         /// <summary>
-        /// AEAD decrypt one SSH packet: <paramref name="aad"/> is the 4-byte
-        /// plaintext packet_length (RFC 5647 §7.3); <paramref name="ciphertextWithTag"/>
-        /// is ciphertext || tag, output is plaintext. Throws CryptographicException
-        /// on tag mismatch — Session maps that to DisconnectReason.MacError,
-        /// matching the HMAC path.
+        /// AEAD decrypt one SSH packet straight into <paramref name="plaintextDestination"/>:
+        /// <paramref name="aad"/> is the 4-byte plaintext packet_length (RFC 5647
+        /// section 7.3 - authenticated but not encrypted);
+        /// <paramref name="ciphertextWithTag"/> is ciphertext || tag.
+        /// Throws CryptographicException on tag mismatch - Session maps that to
+        /// DisconnectReason.MacError, matching the HMAC path.
+        ///
+        /// <paramref name="plaintextDestination"/> must be at least
+        /// <paramref name="ciphertextWithTag"/>.Length - TagBytes long.
+        /// No intermediate allocation on the hot path.
         /// </summary>
-        public byte[] DecryptAead(byte[] aad, byte[] ciphertextWithTag)
+        public void DecryptAead(ReadOnlySpan<byte> aad, ReadOnlySpan<byte> ciphertextWithTag, Span<byte> plaintextDestination)
         {
             if (_gcmTransform == null)
                 throw new InvalidOperationException("DecryptAead is only valid for GCM.");
-            return _gcmTransform.Decrypt(aad, ciphertextWithTag);
+            _gcmTransform.Decrypt(aad, ciphertextWithTag, plaintextDestination);
         }
 
         private ICryptoTransform CreateTransform(bool isEncryption)

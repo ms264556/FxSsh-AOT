@@ -32,10 +32,15 @@ namespace SshServerLoader
             Task.Run(() => MessageLoop());
         }
 
-        public void OnData(byte[] data)
+        public void OnData(ReadOnlyMemory<byte> data)
         {
-            _process.StandardInput.BaseStream.Write(data, 0, data.Length);
-            _process.StandardInput.BaseStream.Flush();
+            var stream = _process.StandardInput.BaseStream;
+            var span = data.Span;
+            // Synchronous write on the SSH message loop thread; the slice is
+            // live for the duration of this call, so write straight from the
+            // SSH receive buffer without an intermediate copy.
+            stream.Write(span);
+            stream.Flush();
         }
 
         public void OnClose()

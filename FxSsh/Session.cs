@@ -3,6 +3,7 @@ using FxSsh.Messages;
 using FxSsh.Messages.Connection;
 using FxSsh.Services;
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -258,7 +259,66 @@ namespace FxSsh
             SocketWrite(Encoding.ASCII.GetBytes(ServerVersion + "\r\n"));
         }
 
-        private byte[] SocketRead(int length)
+        /// <summary>
+        /// A pooled receive buffer rented from <see cref="ArrayPool{byte}.Shared"/>
+        /// by <see cref="SocketRead"/> and returned on Dispose. Callers must
+        /// <c>using</c> the result and consume the bytes before disposing —
+        /// the exposed <see cref="Span"/>/<see cref="Memory"/> views are valid
+        /// only until Dispose returns the rental to the pool.
+        ///
+        /// Replaces the per-packet <c>new byte[length]</c> that previously
+        /// backed every SocketRead call. The pool gives us a buffer that may
+        /// be larger than <see cref="Length"/>; consumers must slice through
+        /// <see cref="Span"/>/<see cref="Memory"/>, NOT index <see cref="Buffer"/>
+        /// past <see cref="Length"/>.
+        /// </summary>
+        private ref struct PooledReceiveBuffer
+        {
+            private byte[] _buffer;
+            private readonly int _length;
+
+            public PooledReceiveBuffer(byte[] buffer, int length)
+            {
+                _buffer = buffer;
+                _length = length;
+            }
+
+            public int Length => _length;
+            public byte[] Buffer => _buffer ?? throw new ObjectDisposedException(nameof(PooledReceiveBuffer));
+            public Span<byte> Span => _buffer.AsSpan(0, _length);
+            public ReadOnlySpan<byte> ReadOnlySpan => _buffer.AsSpan(0, _length);
+            public Memory<byte> Memory => _buffer.AsMemory(0, _length);
+            public ReadOnlyMemory<byte> ReadOnlyMemory => _buffer.AsMemory(0, _length);
+
+            /// <summary>
+            /// Slice the pooled buffer without copying. Valid only until Dispose.
+            /// </summary>
+            public ReadOnlySpan<byte> Slice(int start, int length) => _buffer.AsSpan(start, length);
+
+            public void Dispose()
+            {
+                if (_buffer != null)
+                {
+                    ArrayPool<byte>.Shared.Return(_buffer);
+                    _buffer = null!;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Read exactly <paramref name="length"/> bytes from the socket into a
+        /// pooled buffer (ArrayPool<byte>.Shared). Returns a ref struct that
+        /// returns the rental on Dispose — callers MUST <c>using</c> the result
+        /// and consume the bytes before disposing. The pooled buffer may be
+        /// larger than <paramref name="length"/>; consume via the returned
+        /// Span/Memory views, not by indexing Buffer past Length.
+        ///
+        /// Replaces the previous <c>new byte[length]</c> per call. On the SSH
+        /// receive hot path this cuts one allocation per SocketRead call —
+        /// AEAD: 2 calls (len + ciphertext), ETM: 3 calls, non-ETM: 4 calls
+        /// per packet — all now pooled rather than GC'd.
+        /// </summary>
+        private PooledReceiveBuffer SocketRead(int length)
         {
             if (length < 0 || length > MaximumPacketLength + 4 + 64)
             {
@@ -267,7 +327,7 @@ namespace FxSsh
                     DisconnectReason.ProtocolError);
             }
 
-            var buffer = new byte[length];
+            var buffer = ArrayPool<byte>.Shared.Rent(length);
             var pos = 0;
 
             while (pos < length)
@@ -294,10 +354,10 @@ namespace FxSsh
                 pos += len;
             }
 
-            return buffer;
+            return new PooledReceiveBuffer(buffer, length);
         }
 
-        private void SocketWrite(byte[] data)
+        private void SocketWrite(ReadOnlySpan<byte> data)
         {
             var pos = 0;
             var length = data.Length;
@@ -310,7 +370,7 @@ namespace FxSsh
                 int sent;
                 try
                 {
-                    sent = _socket.Send(data, pos, length - pos, SocketFlags.None);
+                    sent = _socket.Send(data.Slice(pos, length - pos));
                 }
                 catch (SocketException ex) when (
                     ex.SocketErrorCode == SocketError.WouldBlock ||
@@ -353,8 +413,12 @@ namespace FxSsh
             // validated separately as bounded by MaximumPacketLength).
             if (isAead)
             {
-                var lenBuf = SocketRead(4);
-                var packetLength = lenBuf[0] << 24 | lenBuf[1] << 16 | lenBuf[2] << 8 | lenBuf[3];
+                // lenBuf is the 4-byte plaintext packet_length that GCM uses
+                // as Additional Authenticated Data. Dispose after DecryptAead
+                // consumes it.
+                using var lenBuf = SocketRead(4);
+                var lenSpan = lenBuf.Span;
+                var packetLength = lenSpan[0] << 24 | lenSpan[1] << 16 | lenSpan[2] << 8 | lenSpan[3];
                 if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
                 {
                     throw new SshConnectionException(
@@ -366,36 +430,51 @@ namespace FxSsh
                 // packetLength bytes of ciphertext: padding_length || payload || padding,
                 // followed by the 16-byte GCM tag. Per RFC 5647 section 7.3 the 4-byte
                 // plaintext packet_length (lenBuf) is GCM's Additional Authenticated
-                // Data — authenticated but not encrypted, covered by the tag.
+                // Data -- authenticated but not encrypted, covered by the tag.
                 var tagLength = _algorithms.ClientEncryption.TagBytes;
-                var ciphertextWithTag = SocketRead(packetLength + tagLength);
+                using var ciphertextWithTag = SocketRead(packetLength + tagLength);
 
-                byte[] decrypted;
+                // Decrypt straight into a pooled buffer (the plaintext is exactly
+                // packetLength bytes). The rental is returned in finally after
+                // Decompress has copied the payload out, so the receive path
+                // allocates no plaintext array per packet.
+                var plaintext = ArrayPool<byte>.Shared.Rent(packetLength);
                 try
                 {
-                    decrypted = _algorithms.ClientEncryption.DecryptAead(lenBuf, ciphertextWithTag[..(packetLength + tagLength)]);
+                    // AAD is exactly the 4-byte plaintext packet_length --
+                    // NOT the whole lenBuf rental (ArrayPool hands back at
+                    // least 16 bytes; OpenSSH authenticates exactly 4).
+                    _algorithms.ClientEncryption.DecryptAead(
+                        lenBuf.ReadOnlySpan,
+                        ciphertextWithTag.Buffer.AsSpan(0, packetLength + tagLength),
+                        plaintext);
+
+                    var paddingLength = plaintext[0];
+                    var dataLength = packetLength - paddingLength - 1;
+                    var data = plaintext.AsMemory(1, dataLength);
+                    var dataArray = _algorithms.ClientCompression.Decompress(data).ToArray();
+
+                    return LoadMessage(dataArray[0], dataArray, packetLength);
                 }
                 catch (CryptographicException)
                 {
-                    // GCM tag mismatch is the AEAD equivalent of an HMAC failure —
-                    // RFC 4253 §6.4 mandates connection termination with MAC_ERROR.
+                    // GCM tag mismatch is the AEAD equivalent of an HMAC failure --
+                    // RFC 4253 section 6.4 mandates connection termination with MAC_ERROR.
                     throw new SshConnectionException("Invalid AEAD tag", DisconnectReason.MacError);
                 }
-
-                var paddingLength = decrypted[0];
-                var dataLength = packetLength - paddingLength - 1;
-                var data = decrypted[1..(1 + dataLength)];
-                data = _algorithms.ClientCompression.Decompress(data).ToArray();
-
-                return LoadMessage(data[0], data, packetLength);
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(plaintext);
+                }
             }
 
             // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT encrypted.
             // Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
             if (isEtm)
             {
-                var lenBuf = SocketRead(4);
-                var packetLength = lenBuf[0] << 24 | lenBuf[1] << 16 | lenBuf[2] << 8 | lenBuf[3];
+                using var lenBuf = SocketRead(4);
+                var lenSpan = lenBuf.Span;
+                var packetLength = lenSpan[0] << 24 | lenSpan[1] << 16 | lenSpan[2] << 8 | lenSpan[3];
                 if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
                 {
                     throw new SshConnectionException(
@@ -405,58 +484,65 @@ namespace FxSsh
                 }
 
                 // packetLength bytes of ciphertext: padding_length || payload || padding.
-                var cipher = SocketRead(packetLength);
-                var encryptedCopy = cipher[..];
+                using var cipher = SocketRead(packetLength);
+                var encryptedSpan = cipher.ReadOnlySpan;
 
-                var clientMac = SocketRead(_algorithms.ClientHmac.DigestLength);
-                var mac = ComputeHmac(_algorithms.ClientHmac, lenBuf, encryptedCopy, _inboundPacketSequence);
-                if (!clientMac.SequenceEqual(mac))
+                // clientMacBuf is disposed right after the SequenceEqual
+                // comparison, before we touch the cipher buffer again.
+                using var clientMacBuf = SocketRead(_algorithms.ClientHmac.DigestLength);
+                Span<byte> mac = stackalloc byte[_algorithms.ClientHmac.DigestLength];
+                ComputeHmac(_algorithms.ClientHmac, lenBuf.ReadOnlySpan, encryptedSpan, _inboundPacketSequence, mac);
+                if (!clientMacBuf.Span.SequenceEqual(mac))
                 {
                     throw new SshConnectionException("Invalid MAC", DisconnectReason.MacError);
                 }
 
-                _algorithms.ClientEncryption.Transform(cipher, cipher);
-                var paddingLength = cipher[0];
+                _algorithms.ClientEncryption.Transform(cipher.Buffer, cipher.Buffer);
+                var paddingLength = cipher.Span[0];
                 var dataLength = packetLength - paddingLength - 1;
-                var data = cipher[1..(1 + dataLength)];
-                data = _algorithms.ClientCompression.Decompress(data).ToArray();
+                var data = cipher.Memory.Slice(1, dataLength);
+                var dataArray = _algorithms.ClientCompression.Decompress(data).ToArray();
 
-                return LoadMessage(data[0], data, packetLength);
+                return LoadMessage(dataArray[0], dataArray, packetLength);
             }
 
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ClientEncryption.BlockBytesSize) : 8);
-            var rawFirst = SocketRead(blockSize);
+            using var rawFirst = SocketRead(blockSize);
             if (useAlg)
-                _algorithms.ClientEncryption.Transform(rawFirst, rawFirst);
+                _algorithms.ClientEncryption.Transform(rawFirst.Buffer, rawFirst.Buffer);
 
-            var packetLengthNonEtm = rawFirst[0] << 24 | rawFirst[1] << 16 | rawFirst[2] << 8 | rawFirst[3];
+            var rawFirstSpan = rawFirst.Span;
+            var packetLengthNonEtm = rawFirstSpan[0] << 24 | rawFirstSpan[1] << 16 | rawFirstSpan[2] << 8 | rawFirstSpan[3];
             if (packetLengthNonEtm < MinimumPacketLength || packetLengthNonEtm > MaximumPacketLength)
             {
                 throw new SshConnectionException(
                     string.Format("Invalid packet length {0}. Must be between {1} and {2}.",
                         (uint)packetLengthNonEtm, MinimumPacketLength, MaximumPacketLength),
-                    DisconnectReason.ProtocolError);
+                        DisconnectReason.ProtocolError);
             }
 
-            var paddingLengthNonEtm = rawFirst[4];
+            var paddingLengthNonEtm = rawFirstSpan[4];
             var bytesToRead = packetLengthNonEtm - blockSize + 4;
 
-            var followingBlocks = SocketRead(bytesToRead);
+            using var followingBlocks = SocketRead(bytesToRead);
             if (useAlg && followingBlocks.Length > 0)
-                _algorithms.ClientEncryption.Transform(followingBlocks, followingBlocks);
+                _algorithms.ClientEncryption.Transform(followingBlocks.Buffer, followingBlocks.Buffer);
 
             var dataLengthNonEtm = packetLengthNonEtm - paddingLengthNonEtm;
             var dataNonEtm = new byte[dataLengthNonEtm];
             var fromFirst = Math.Min(dataLengthNonEtm, blockSize - 5);
             if (fromFirst > 0)
-                Buffer.BlockCopy(rawFirst, 5, dataNonEtm, 0, fromFirst);
-            Buffer.BlockCopy(followingBlocks, 0, dataNonEtm, fromFirst, dataLengthNonEtm - fromFirst);
+                rawFirst.Span.Slice(5, fromFirst).CopyTo(dataNonEtm);
+            followingBlocks.Span.Slice(0, dataLengthNonEtm - fromFirst).CopyTo(dataNonEtm.AsSpan(fromFirst));
 
             if (useAlg)
             {
-                var clientMac = SocketRead(_algorithms.ClientHmac.DigestLength);
-                var mac = ComputeHmac(_algorithms.ClientHmac, rawFirst, followingBlocks, _inboundPacketSequence);
-                if (!clientMac.SequenceEqual(mac))
+                // clientMacBuf is disposed after the SequenceEqual comparison,
+                // before we re-read the cipher for Decompress.
+                using var clientMacBuf = SocketRead(_algorithms.ClientHmac.DigestLength);
+                Span<byte> mac = stackalloc byte[_algorithms.ClientHmac.DigestLength];
+                ComputeHmac(_algorithms.ClientHmac, rawFirst.ReadOnlySpan, followingBlocks.ReadOnlySpan, _inboundPacketSequence, mac);
+                if (!clientMacBuf.Span.SequenceEqual(mac))
                 {
                     throw new SshConnectionException("Invalid MAC", DisconnectReason.MacError);
                 }
@@ -520,9 +606,33 @@ namespace FxSsh
             var isAead = useAlg && _algorithms.ServerEncryption.IsAead;
 
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ServerEncryption.BlockBytesSize) : 8);
-            var payload = message.GetPacket();
+
+            // Build the message payload (MessageType + fields) directly into
+            // a pooled-buffer writer. With useAlg the compressor may still
+            // return its own byte[] (out of our scope), but the no-compression
+            // path — the hot forwarding case — now produces zero intermediate
+            // arrays: payload stays inside the pooled writer until framed.
+            //
+            // payload is either the writer ( uncompressed, to be framed in
+            // place by TryWriteTo) or a byte[] from the compressor. We treat
+            // both uniformly via a small abstraction: a (byte[] array, int
+            // length) pair where array is null means "still in the writer".
+            SshDataWriter payloadWriter = null;
+            byte[] payload = null;
+            int payloadLength;
+
             if (useAlg)
-                payload = _algorithms.ServerCompression.Compress(payload);
+            {
+                // Compressor returns a byte[]; keep that array as the payload.
+                payload = _algorithms.ServerCompression.Compress(message.GetPacket());
+                payloadLength = payload.Length;
+            }
+            else
+            {
+                payloadWriter = new SshDataWriter();
+                message.WritePayload(payloadWriter);
+                payloadLength = payloadWriter.Length;
+            }
 
             // http://tools.ietf.org/html/rfc4253
             // 6.  Binary Packet Protocol
@@ -537,28 +647,46 @@ namespace FxSsh
             byte paddingLength;
             if (useAlg && (_algorithms.ServerHmacIsEtm || isAead))
             {
-                paddingLength = (byte)(blockSize - (payload.Length + 1) % blockSize);
+                paddingLength = (byte)(blockSize - (payloadLength + 1) % blockSize);
                 if (paddingLength < 4)
                     paddingLength += blockSize;
             }
             else
             {
-                paddingLength = (byte)(blockSize - (payload.Length + 5) % blockSize);
+                paddingLength = (byte)(blockSize - (payloadLength + 5) % blockSize);
                 if (paddingLength < 4)
                     paddingLength += blockSize;
             }
 
-            var packetLength = (uint)payload.Length + paddingLength + 1;
+            var packetLength = (uint)payloadLength + paddingLength + 1;
 
             var padding = new byte[paddingLength];
             RandomNumberGenerator.Fill(padding);
 
-            payload = new SshDataWriter(5 + payload.Length + padding.Length)
-                .Write(packetLength)
-                .Write(paddingLength)
-                .WriteBytes(payload)
-                .WriteBytes(padding)
-                .ToByteArray();
+            // Frame the packet: [packet_length(4)][padding_length(1)][payload][padding]
+            // The framed length is 5 + payloadLength + paddingLength; for the
+            // uncompressed path we write straight into a freshly rented pooled
+            // buffer of exactly this size (one rent, no MemoryStream, no
+            // intermediate payload array). For the compressed path payload is
+            // already a byte[], so we build the frame the same way via a writer.
+            var frame = new SshDataWriter(5 + payloadLength + paddingLength);
+            frame.Write(packetLength);
+            frame.Write(paddingLength);
+            if (payload != null)
+                frame.WriteBytes(payload);
+            else
+                // Copy the pooled writer's bytes into the frame writer. This
+                // is the one unavoidable copy on the uncompressed path: the
+                // payload lived in its own pooled rental, the frame lives in
+                // another. (Pre-B we had TWO such copies plus a MemoryStream;
+                // now it's one.)
+                frame.WriteBytes(payloadWriter.AsMemory());
+            frame.WriteBytes(padding);
+            var framed = frame.ToByteArray();
+
+            // From here `framed` replaces the old `payload` variable: it is the
+            // complete plaintext packet [packet_length][padding_length][payload][padding].
+            var plaintextPacket = framed;
 
             if (useAlg)
             {
@@ -566,50 +694,63 @@ namespace FxSsh
                 {
                     // RFC 5647 section 3 + 7.3 AEAD layout:
                     // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
-                    // No separate MAC — the GCM tag is the authenticator. Per
+                    // No separate MAC - the GCM tag is the authenticator. Per
                     // RFC 5647 section 7.3 the 4-byte plaintext packet_length is fed to
                     // GCM as Additional Authenticated Data (authenticated but not
                     // encrypted), so it is covered by the tag. OpenSSH/OpenSSL
                     // does exactly this in cipher.c (EVP_Cipher with aadlen=4).
-                    var cipherLen = payload.Length - 4;
-                    var ciphertextWithTag = _algorithms.ServerEncryption.EncryptAead(payload[..4], payload[4..]);
-
-                    var packet = new byte[4 + ciphertextWithTag.Length];
-                    Buffer.BlockCopy(payload, 0, packet, 0, 4);
-                    Buffer.BlockCopy(ciphertextWithTag, 0, packet, 4, ciphertextWithTag.Length);
-                    payload = packet;
+                    //
+                    // Encrypt straight into the final packet buffer: the 4-byte
+                    // plaintext length is the AAD (Span slice, no allocation),
+                    // ciphertext + tag land directly in packet[4..], so no
+                    // intermediate ciphertext array or BlockCopy is needed.
+                    var tagBytes = _algorithms.ServerEncryption.TagBytes;
+                    var cipherLen = plaintextPacket.Length - 4;
+                    var packet = new byte[4 + cipherLen + tagBytes];
+                    _algorithms.ServerEncryption.EncryptAead(
+                        plaintextPacket.AsSpan(0, 4),
+                        plaintextPacket.AsSpan(4),
+                        packet.AsSpan(4));
+                    plaintextPacket = packet;
                 }
                 else if (_algorithms.ServerHmacIsEtm)
                 {
                     // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT
                     // encrypted. Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
                     // MAC covers seq || length || ciphertext.
+                    // Encrypt the body in place (plaintextPacket[4..] becomes
+                    // ciphertext) via the offset-capable Transform overload, so
+                    // no scratch ciphertext array is allocated per packet.
                     var macLength = _algorithms.ServerHmac.DigestLength;
-                    var cipherLen = payload.Length - 4;
-                    var encrypted = new byte[cipherLen + macLength];
-                    _algorithms.ServerEncryption.Transform(payload[4..], encrypted);
+                    var cipherLen = plaintextPacket.Length - 4;
+                    _algorithms.ServerEncryption.Transform(plaintextPacket, 4, cipherLen, plaintextPacket, 4);
 
-                    var mac = ComputeHmac(_algorithms.ServerHmac, payload[..4], encrypted[..cipherLen], _outboundPacketSequence);
+                    Span<byte> mac = stackalloc byte[macLength];
+                    ComputeHmac(_algorithms.ServerHmac, plaintextPacket.AsSpan(0, 4), plaintextPacket.AsSpan(4, cipherLen), _outboundPacketSequence, mac);
 
                     var packet = new byte[4 + cipherLen + macLength];
-                    Buffer.BlockCopy(payload, 0, packet, 0, 4);
-                    Buffer.BlockCopy(encrypted, 0, packet, 4, cipherLen);
-                    Buffer.BlockCopy(mac, 0, packet, 4 + cipherLen, macLength);
-                    payload = packet;
+                    Buffer.BlockCopy(plaintextPacket, 0, packet, 0, 4 + cipherLen);
+                    mac.CopyTo(packet.AsSpan(4 + cipherLen));
+                    plaintextPacket = packet;
                 }
                 else
                 {
                     // RFC 4253: the whole packet is encrypted; MAC covers the plaintext.
                     var macLength = _algorithms.ServerHmac.DigestLength;
-                    var encrypted = new byte[payload.Length + macLength];
-                    _algorithms.ServerEncryption.Transform(payload, encrypted);
-                    var mac = ComputeHmac(_algorithms.ServerHmac, payload, Array.Empty<byte>(), _outboundPacketSequence);
-                    Buffer.BlockCopy(mac, 0, encrypted, payload.Length, mac.Length);
-                    payload = encrypted;
+                    var encrypted = new byte[plaintextPacket.Length + macLength];
+                    _algorithms.ServerEncryption.Transform(plaintextPacket, encrypted);
+                    Span<byte> mac = stackalloc byte[macLength];
+                    ComputeHmac(_algorithms.ServerHmac, plaintextPacket, ReadOnlySpan<byte>.Empty, _outboundPacketSequence, mac);
+                    mac.CopyTo(encrypted.AsSpan(plaintextPacket.Length));
+                    plaintextPacket = encrypted;
                 }
             }
 
-            SocketWrite(payload);
+            SocketWrite(plaintextPacket);
+
+            // Dispose the pooled writer now that the frame has absorbed it.
+            // (For the compressed path payloadWriter is null.)
+            payloadWriter?.Dispose();
 
             lock (_locker)
             {
@@ -1169,9 +1310,16 @@ namespace FxSsh
             return keyBuffer;
         }
 
-        private byte[] ComputeHmac(HmacAlgorithm alg, byte[] a, byte[] b, uint seq)
+        /// <summary>
+        /// Compute the SSH packet MAC <c>seq ‖ a ‖ b</c> straight into
+        /// <paramref name="destination"/> via the Span-based HMAC core
+        /// (HmacAlgorithm.ComputeHash overload). Caller owns the destination
+        /// — typically a stackalloc Span sized to DigestLength, so the
+        /// per-packet MAC computation is now zero-allocation.
+        /// </summary>
+        private void ComputeHmac(HmacAlgorithm alg, ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, uint seq, Span<byte> destination)
         {
-            return alg.ComputeHash(a, b, seq);
+            alg.ComputeHash(a, b, seq, destination);
         }
 
         internal SshService RegisterService(string serviceName, UserAuthArgs auth = null)

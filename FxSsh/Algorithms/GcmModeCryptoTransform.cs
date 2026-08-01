@@ -15,11 +15,19 @@ namespace FxSsh.Algorithms
     /// AEAD entry points (EncryptAead / DecryptAead) on EncryptionAlgorithm,
     /// which in turn call Encrypt / Decrypt here.
     ///
+    /// Hot-path allocation profile: zero. The 12-byte nonce is a reused
+    /// instance field (only the 8-byte counter half is refreshed per
+    /// packet), and Encrypt/Decrypt write straight into caller-supplied
+    /// destination spans -- no intermediate nonce/ciphertext/plaintext
+    /// arrays are allocated per packet. The underlying AesGcm call is
+    /// already Span-based (OpenSSL/AES-NI), so the managed layer adds no
+    /// allocations on top of the native cipher.
+    ///
     /// Nonce layout per RFC 5647 section 7.1 and the OpenSSH/OpenSSL implementation
     /// (cipher.c + EVP_CTRL_GCM_SET_IV_FIXED with arg=-1): the full 12-byte
     /// IV is materialised by key exchange. The first 4 bytes are the fixed
     /// field; the last 8 bytes seed the invocation counter and are NOT reset
-    /// to zero — OpenSSL's EVP_CTRL_GCM_IV_GEN "generate precounter block
+    /// to zero -- OpenSSL's EVP_CTRL_GCM_IV_GEN "generate precounter block
     /// from the IV, then increment the last eight bytes by 1" means the very
     /// first packet uses the IV's last 8 bytes verbatim as the counter, and
     /// each subsequent packet adds 1. We mirror that exactly: counter starts
@@ -28,7 +36,9 @@ namespace FxSsh.Algorithms
     public sealed class GcmModeCryptoTransform
     {
         private readonly AesGcm _gcm;
-        private readonly byte[] _fixedIV;   // first 4 bytes of every nonce
+        // Reused 12-byte nonce: [0..4] is the fixed field (set once from the
+        // IV at construction), [4..12] is refreshed from _counter per packet.
+        private readonly byte[] _nonce = new byte[12];
         private readonly byte[] _counter;   // 8-byte big-endian invocation counter
         private readonly int _tagBytes = 16;
 
@@ -43,9 +53,8 @@ namespace FxSsh.Algorithms
                 throw new ArgumentException("AES-GCM IV must be 12 bytes (fixed(4) || invocation_counter(8), RFC 5647 section 7.1).", nameof(iv));
 
             _gcm = new AesGcm(key, _tagBytes);
-            _fixedIV = new byte[4];
-            Buffer.BlockCopy(iv, 0, _fixedIV, 0, 4);
-            // Counter is seeded from the IV's last 8 bytes — NOT zero. OpenSSL's
+            Buffer.BlockCopy(iv, 0, _nonce, 0, 4);
+            // Counter is seeded from the IV's last 8 bytes -- NOT zero. OpenSSL's
             // SET_IV_FIXED(arg=-1) copies the entire 12-byte IV, and IV_GEN uses
             // the current IV for the current packet before incrementing, so the
             // first packet's counter == the IV's last 8 bytes verbatim.
@@ -57,69 +66,73 @@ namespace FxSsh.Algorithms
         public int TagBytes => _tagBytes;
 
         /// <summary>
-        /// Encrypt one SSH packet. <paramref name="aad"/> is the 4-byte
-        /// plaintext packet_length (RFC 5647 section 7.3 — authenticated but not
-        /// encrypted); <paramref name="plaintext"/> is padding_length ||
-        /// payload || padding. Returns ciphertext || tag, ready to follow the
-        /// plaintext packet_length on the wire as
-        /// [packet_length(4)][ciphertext][tag(16)].
+        /// Encrypt one SSH packet straight into <paramref name="destination"/>:
+        /// <paramref name="aad"/> is the 4-byte plaintext packet_length
+        /// (RFC 5647 section 7.3 - authenticated but not encrypted);
+        /// <paramref name="plaintext"/> is padding_length || payload || padding.
+        /// Writes ciphertext || tag, ready to follow the plaintext packet_length
+        /// on the wire as [packet_length(4)][ciphertext][tag(16)].
+        ///
+        /// <paramref name="destination"/> must be at least
+        /// <paramref name="plaintext"/>.Length + <see cref="TagBytes"/> long.
+        /// No allocation on the hot path - the nonce is a reused instance
+        /// buffer and the output lands directly in the caller's span.
         /// </summary>
-        public byte[] Encrypt(byte[] aad, byte[] plaintext)
+        public void Encrypt(ReadOnlySpan<byte> aad, ReadOnlySpan<byte> plaintext, Span<byte> destination)
         {
-            ArgumentNullException.ThrowIfNull(aad);
-            ArgumentNullException.ThrowIfNull(plaintext);
+            if (destination.Length < plaintext.Length + _tagBytes)
+                throw new ArgumentException("Destination too short for GCM ciphertext and tag.", nameof(destination));
 
-            var nonce = BuildNonce();
-            var ciphertext = new byte[plaintext.Length + _tagBytes];
-            _gcm.Encrypt(nonce,
+            RefreshNonce();
+            _gcm.Encrypt(_nonce,
                 plaintext,
-                ciphertext.AsSpan(0, plaintext.Length),
-                ciphertext.AsSpan(plaintext.Length, _tagBytes),
+                destination[..plaintext.Length],
+                destination[plaintext.Length..],
                 aad);
             AdvanceCounter();
-            return ciphertext;
         }
 
         /// <summary>
-        /// Decrypt one SSH packet: <paramref name="aad"/> is the 4-byte
-        /// plaintext packet_length (RFC 5647 section 7.3 — authenticated but not
-        /// encrypted); <paramref name="ciphertextWithTag"/> is ciphertext || tag.
-        /// Throws CryptographicException on tag mismatch — which Session maps to
+        /// Decrypt one SSH packet straight into <paramref name="plaintextDestination"/>:
+        /// <paramref name="aad"/> is the 4-byte plaintext packet_length
+        /// (RFC 5647 section 7.3 - authenticated but not encrypted);
+        /// <paramref name="ciphertextWithTag"/> is ciphertext || tag.
+        /// Throws CryptographicException on tag mismatch - which Session maps to
         /// the same DisconnectReason.MacError used for HMAC verification failure,
         /// matching RFC 4253 section 6.4 guidance.
+        ///
+        /// <paramref name="plaintextDestination"/> must be at least
+        /// <paramref name="ciphertextWithTag"/>.Length - <see cref="TagBytes"/>
+        /// long. No allocation on the hot path.
         /// </summary>
-        public byte[] Decrypt(byte[] aad, byte[] ciphertextWithTag)
+        public void Decrypt(ReadOnlySpan<byte> aad, ReadOnlySpan<byte> ciphertextWithTag, Span<byte> plaintextDestination)
         {
-            ArgumentNullException.ThrowIfNull(aad);
-            ArgumentNullException.ThrowIfNull(ciphertextWithTag);
-
             if (ciphertextWithTag.Length < _tagBytes)
                 throw new ArgumentException("GCM ciphertext shorter than tag.", nameof(ciphertextWithTag));
+            var plaintextLength = ciphertextWithTag.Length - _tagBytes;
+            if (plaintextDestination.Length < plaintextLength)
+                throw new ArgumentException("Destination too short for GCM plaintext.", nameof(plaintextDestination));
 
-            var nonce = BuildNonce();
-            var ciphertextLength = ciphertextWithTag.Length - _tagBytes;
-            var plaintext = new byte[ciphertextLength];
-            _gcm.Decrypt(nonce,
-                ciphertextWithTag.AsSpan(0, ciphertextLength),
-                ciphertextWithTag.AsSpan(ciphertextLength, _tagBytes),
-                plaintext,
+            RefreshNonce();
+            _gcm.Decrypt(_nonce,
+                ciphertextWithTag[..plaintextLength],
+                ciphertextWithTag[plaintextLength..],
+                plaintextDestination[..plaintextLength],
                 aad);
             AdvanceCounter();
-            return plaintext;
         }
 
-        private byte[] BuildNonce()
+        // Copy the current counter into the reused nonce buffer. Zero
+        // allocation - the 12-byte nonce array is a single instance field.
+        private void RefreshNonce()
         {
-            var nonce = new byte[12];
-            Buffer.BlockCopy(_fixedIV, 0, nonce, 0, 4);
-            Buffer.BlockCopy(_counter, 0, nonce, 4, 8);
-            return nonce;
+            _counter.CopyTo(_nonce.AsSpan(4));
         }
 
         private void AdvanceCounter()
         {
             // Big-endian increment of the 8-byte invocation counter. Once it
-            // would wrap (2^64 packets — astronomically beyond any session)
+            // would wrap (2^64 packets -- astronomically beyond any session)
             // we throw rather than silently reuse a nonce, which would be a
             // catastrophic GCM failure.
             for (var i = _counter.Length - 1; i >= 0; i--)

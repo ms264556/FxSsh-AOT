@@ -104,9 +104,10 @@ namespace MiniTerm
             });
         }
 
-        public void OnInput(byte[] data)
+        public void OnInput(ReadOnlyMemory<byte> data)
         {
-            writer.Write(data, 0, data.Length);
+            var span = data.Span;
+            writer.Write(span);
             writer.Flush();
         }
 
