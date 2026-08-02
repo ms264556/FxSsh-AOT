@@ -26,7 +26,10 @@ namespace FxSsh.Messages.UserAuth
             if (HasSignature)
             {
                 Signature = reader.ReadBinaryAsMemory();
-                PayloadWithoutSignature = RawBytes[..(RawBytes.Length - Signature.Length - 5)];
+                // Strip the trailing `string signature` (4-byte length prefix +
+                // content) from RawBytes. The signed data is session_id ||
+                // (type .. public key blob) -- exactly what the peer signed.
+                PayloadWithoutSignature = RawBytes[..(RawBytes.Length - Signature.Length - 4)];
             }
         }
     }

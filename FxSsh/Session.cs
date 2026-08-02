@@ -497,7 +497,11 @@ namespace FxSsh
                     throw new SshConnectionException("Invalid MAC", DisconnectReason.MacError);
                 }
 
-                _algorithms.ClientEncryption.Transform(cipher.Buffer, cipher.Buffer);
+                // Transform exactly packetLength bytes: the buffer is an
+                // ArrayPool rental that may be larger than the packet, and
+                // the CTR keystream counter advances by the transform length -
+                // over-advancing would corrupt every subsequent packet.
+                _algorithms.ClientEncryption.Transform(cipher.Buffer, packetLength, cipher.Buffer);
                 var paddingLength = cipher.Span[0];
                 var dataLength = packetLength - paddingLength - 1;
                 var data = cipher.Memory.Slice(1, dataLength);
@@ -509,7 +513,7 @@ namespace FxSsh
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ClientEncryption.BlockBytesSize) : 8);
             using var rawFirst = SocketRead(blockSize);
             if (useAlg)
-                _algorithms.ClientEncryption.Transform(rawFirst.Buffer, rawFirst.Buffer);
+                _algorithms.ClientEncryption.Transform(rawFirst.Buffer, blockSize, rawFirst.Buffer);
 
             var rawFirstSpan = rawFirst.Span;
             var packetLengthNonEtm = rawFirstSpan[0] << 24 | rawFirstSpan[1] << 16 | rawFirstSpan[2] << 8 | rawFirstSpan[3];
@@ -526,9 +530,14 @@ namespace FxSsh
 
             using var followingBlocks = SocketRead(bytesToRead);
             if (useAlg && followingBlocks.Length > 0)
-                _algorithms.ClientEncryption.Transform(followingBlocks.Buffer, followingBlocks.Buffer);
+                _algorithms.ClientEncryption.Transform(followingBlocks.Buffer, bytesToRead, followingBlocks.Buffer);
 
-            var dataLengthNonEtm = packetLengthNonEtm - paddingLengthNonEtm;
+            // RFC 4253 section 6: payload length = packet_length - padding_length - 1
+            // (the -1 is the padding_length byte itself). The AEAD/ETM paths
+            // above compute the same with - 1; omitting it here would leave a
+            // trailing padding byte in every message, breaking byte-exact
+            // consumers (public-key signature verification data).
+            var dataLengthNonEtm = packetLengthNonEtm - paddingLengthNonEtm - 1;
             var dataNonEtm = new byte[dataLengthNonEtm];
             var fromFirst = Math.Min(dataLengthNonEtm, blockSize - 5);
             if (fromFirst > 0)
@@ -707,6 +716,14 @@ namespace FxSsh
                     var tagBytes = _algorithms.ServerEncryption.TagBytes;
                     var cipherLen = plaintextPacket.Length - 4;
                     var packet = new byte[4 + cipherLen + tagBytes];
+                    // RFC 5647 section 3: the wire layout is
+                    // [packet_length(4, plaintext)][ciphertext][tag(16)]. The
+                    // 4-byte packet_length is GCM's AAD (authenticated but not
+                    // encrypted, passed to EncryptAead below) AND must still be
+                    // transmitted in plaintext -- copy it into packet[0..4] or
+                    // the peer reads a zero length and dies with
+                    // "Bad packet length 0" right after NEWKEYS.
+                    plaintextPacket.AsSpan(0, 4).CopyTo(packet.AsSpan(0, 4));
                     _algorithms.ServerEncryption.EncryptAead(
                         plaintextPacket.AsSpan(0, 4),
                         plaintextPacket.AsSpan(4),
