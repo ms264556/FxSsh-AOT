@@ -104,6 +104,12 @@ bbDmx/ly7kvagszIWafjG8Hzg5v5kKBbdYw9A+9pN2cbhWXug41xR1rLDOI6hFSn
 TA==
 -----END PRIVATE KEY-----";
 
+    Log.Configure(new LogOptions
+    {
+        MinLevel = LogLevel.Trace,
+        Sink = new ConsoleLogSink(),
+    });
+
     var server = new SshServer();
     server.AddHostKey("rsa-sha2-256", rsa2048BitPem);
     server.AddHostKey("rsa-sha2-512", rsa2048BitPem);
@@ -120,7 +126,7 @@ TA==
 
 static void server_ConnectionAccepted(object sender, Session e)
 {
-    Console.WriteLine("Accepted a client.");
+    Log.Info("Connection accepted.");
 
     e.ServiceRegistered += e_ServiceRegistered;
     e.KeysExchanged += e_KeysExchanged;
@@ -130,21 +136,20 @@ private static void e_KeysExchanged(object sender, KeyExchangeArgs e)
 {
     foreach (var keyExchangeAlg in e.KeyExchangeAlgorithms)
     {
-        Console.WriteLine("Key exchange algorithm: {0}", keyExchangeAlg);
+        Log.Debug($"Key exchange algorithm: {keyExchangeAlg}.");
     }
 }
 
 static void e_ServiceRegistered(object sender, SshService e)
 {
     var session = (Session)sender;
-    Console.WriteLine("Session {0} requesting {1}.",
-        BitConverter.ToString(session.SessionId).Replace("-", ""), e.GetType().Name);
+    Log.Info($"Session {BitConverter.ToString(session.SessionId).Replace("-", "")} requesting {e.GetType().Name}.");
 
     if (e is UserAuthService)
     {
         var service = (UserAuthService)e;
         // WARNING: Enabling "none" auth poses a high security risk. Please ensure you understand the risks before using it.
-        service.EnableNoneUserAuth = true;
+        service.EnableNoneAuth = true;
         service.UserAuth += service_UserAuth;
     }
     else if (e is ConnectionService)
@@ -160,17 +165,15 @@ static void e_ServiceRegistered(object sender, SshService e)
 
 static void service_TcpForwardRequestReceived(object sender, TcpForwardRequestArgs e)
 {
-    Console.WriteLine("Peer requests reverse forward at {0}:{1}", e.Address, e.Port);
+    Log.Info($"Peer requests reverse forward at {e.Address}:{e.Port}.");
 
-    // DEMO: permit everything. In production, gate by address/port and by
-    // e.AttachedUserAuthArgs (the authenticated user) to avoid the peer
-    // opening listeners on privileged or external interfaces.
-    e.Accepted = true;
+    var allow = true;  // func(e.Address, e.Port, e.AttachedUserAuthArgs);
+    e.Accepted = allow;
 }
 
 static void service_TcpForwardRequest(object sender, TcpRequestArgs e)
 {
-    Console.WriteLine("Received a request to forward data to {0}:{1}", e.Host, e.Port);
+    Log.Info($"Received a request to forward data to {e.Host}:{e.Port}.");
 
     var allow = true;  // func(e.Host, e.Port, e.AttachedUserAuthArgs);
 
@@ -187,26 +190,26 @@ static void service_TcpForwardRequest(object sender, TcpRequestArgs e)
 
 static void service_PtyReceived(object sender, PtyArgs e)
 {
-    Console.WriteLine("Request to create a PTY received for terminal type {0}", e.Terminal);
+    Log.Info($"Request to create a PTY received for terminal type {e.Terminal}.");
     windowWidth = (int)e.WidthChars;
     windowHeight = (int)e.HeightRows;
 }
 
 static void service_EnvReceived(object sender, EnvironmentArgs e)
 {
-    Console.WriteLine("Received environment variable {0}:{1}", e.Name, e.Value);
+    Log.Info($"Received environment variable {e.Name}:{e.Value}.");
 }
 
 static void service_UserAuth(object sender, UserAuthArgs e)
 {
-    Console.WriteLine("Client {0} fingerprint: {1}.", e.KeyAlgorithm, e.Fingerprint);
+    Log.Info($"Client {e.KeyAlgorithm} fingerprint: {e.Fingerprint}.");
 
     e.Result = true;
 }
 
 static void service_CommandOpened(object sender, CommandRequestedArgs e)
 {
-    Console.WriteLine($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\", client key SHA256:{e.AttachedUserAuthArgs.Fingerprint}.");
+    Log.Info($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\", client key SHA256:{e.AttachedUserAuthArgs.Fingerprint}.");
 
     e.Agreed = true;  // func(e.ShellType, e.CommandText, e.AttachedUserAuthArgs);
 
@@ -219,9 +222,9 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
         // also, you can call powershell.exe
         var terminal = new Terminal("cmd.exe", windowWidth, windowHeight);
 
+        e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
         e.Channel.DataReceived += (ss, ee) => terminal.OnInput(ee);
         e.Channel.CloseReceived += (ss, ee) => terminal.OnClose();
-        e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
         terminal.DataReceived += (ss, ee) => e.Channel.SendData(ee);
         terminal.CloseReceived += (ss, ee) => e.Channel.SendClose(ee);
 
@@ -250,7 +253,8 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
             var sftp = new SftpService(OperatingSystem.IsWindows() ? @"C:\" : @"/");
             e.Channel.DataReceived += (ss, ee) => sftp.OnData(ee);
             e.Channel.CloseReceived += (ss, ee) => sftp.OnClose();
-            sftp.DataReceived += (ss, ee) => e.Channel.SendData(ee);
+            sftp.DataReceived += async (ss, ee) => e.Channel.SendData(ee);
+            sftp.CloseReceived += async (ss, ee) => e.Channel.SendClose(ee);
         }
     }
 }

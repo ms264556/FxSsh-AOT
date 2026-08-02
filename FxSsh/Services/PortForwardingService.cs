@@ -1,3 +1,4 @@
+using FxSsh.Logging;
 using System;
 using System.Collections.Generic;
 using System.Net;
@@ -63,6 +64,7 @@ namespace FxSsh.Services
         {
             _listener.Start();
             BoundPort = (uint)((IPEndPoint)_listener.LocalEndpoint).Port;
+            Log.Info($"Forwarding listener bound at {BoundAddress}:{BoundPort}.");
             Task.Run(AcceptLoop);
         }
 
@@ -92,6 +94,7 @@ namespace FxSsh.Services
                 }
                 catch
                 {
+                    Log.Warn($"Forwarded channel open failed for {remote}; dropping TCP connection.");
                     try { client.Close(); } catch { }
                     continue;
                 }
@@ -109,6 +112,7 @@ namespace FxSsh.Services
         /// <summary>Wire a forwarded channel to a socket: socket→channel data, channel close→socket close.</summary>
         private void Bridge(Channel channel, Socket socket)
         {
+            Log.Debug($"Bridge established: channel {channel.ServerChannelId} ↔ {socket.RemoteEndPoint}.");
             lock (_bridgeLocker)
                 _bridges.Add((channel, socket));
 
@@ -179,6 +183,7 @@ namespace FxSsh.Services
                     lock (_bridgeLocker)
                         _bridges.Remove((channel, socket));
 
+                    Log.Debug($"Bridge closed: channel {channel.ServerChannelId}.");
                     ForwardedChannelClosed?.Invoke(this, channel);
                 }
             });
@@ -186,6 +191,7 @@ namespace FxSsh.Services
 
         public void Dispose()
         {
+            Log.Debug($"Forwarding listener {BoundAddress}:{BoundPort} stopping.");
             _cts.Cancel();
             try { _listener.Stop(); } catch { }
 

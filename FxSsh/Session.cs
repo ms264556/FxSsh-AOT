@@ -1,4 +1,5 @@
 ﻿using FxSsh.Algorithms;
+using FxSsh.Logging;
 using FxSsh.Messages;
 using FxSsh.Messages.Connection;
 using FxSsh.Services;
@@ -139,13 +140,16 @@ namespace FxSsh
 
             SocketWriteProtocolVersion();
             ClientVersion = SocketReadProtocolVersion();
+            Log.Info($"Client version: {ClientVersion}.");
             if (!Regex.IsMatch(ClientVersion, "SSH-2.0-.+"))
             {
+                Log.Warn($"Unsupported client SSH version: {ClientVersion}.");
                 throw new SshConnectionException(
                     string.Format("Not supported for client SSH version {0}. This server only supports SSH v2.0.", ClientVersion),
                     DisconnectReason.ProtocolVersionNotSupported);
             }
 
+            Log.Debug("Session established, starting key exchange.");
             ConsiderReExchange(true);
 
             try
@@ -154,7 +158,10 @@ namespace FxSsh
                 {
                     var message = ReceiveMessage();
                     if (message is UnknownMessage unknownMessage)
+                    {
+                        Log.Debug($"Unknown message type {((UnknownMessage)message).UnknownMessageType}, replying SSH_MSG_UNIMPLEMENTED.");
                         SendMessage(unknownMessage.MakeUnimplementedMessage());
+                    }
                     else
                         HandleMessageCore(message);
                 }
@@ -204,6 +211,7 @@ namespace FxSsh
                 _socket = null;
             }
 
+            Log.Info($"Session disconnected: {reason} - {description}");
             Disconnected?.Invoke(this, EventArgs.Empty);
         }
 
@@ -230,7 +238,25 @@ namespace FxSsh
                 if (!WaitForSocket(SelectMode.SelectRead))
                     throw new SshConnectionException("Could't read the protocal version", DisconnectReason.ProtocolError);
 
-                var len = _socket.Receive(buffer, pos, buffer.Length - pos, SocketFlags.Peek);
+                int len;
+                try
+                {
+                    len = _socket.Receive(buffer, pos, buffer.Length - pos, SocketFlags.Peek);
+                }
+                catch (SocketException exp) when (
+                    exp.SocketErrorCode == SocketError.WouldBlock ||
+                    exp.SocketErrorCode == SocketError.IOPending ||
+                    exp.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
+                {
+                    continue;
+                }
+                catch (SocketException exp) when (
+                    exp.SocketErrorCode == SocketError.ConnectionReset ||
+                    exp.SocketErrorCode == SocketError.ConnectionAborted ||
+                    exp.SocketErrorCode == SocketError.Shutdown)
+                {
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+                }
                 if (len == 0)
                 {
                     throw new SshConnectionException("Could't read the protocal version", DisconnectReason.ProtocolError);
@@ -347,6 +373,16 @@ namespace FxSsh
                 {
                     continue;
                 }
+                catch (SocketException exp) when (
+                    exp.SocketErrorCode == SocketError.ConnectionReset ||
+                    exp.SocketErrorCode == SocketError.ConnectionAborted ||
+                    exp.SocketErrorCode == SocketError.Shutdown)
+                {
+                    // Peer closed or reset the connection (e.g. normal exit after
+                    // our channel/session teardown). Treat as a clean ConnectionLost,
+                    // not an unexpected protocol error.
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
+                }
 
                 if (len == 0)
                     throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
@@ -378,6 +414,13 @@ namespace FxSsh
                     ex.SocketErrorCode == SocketError.NoBufferSpaceAvailable)
                 {
                     continue;
+                }
+                catch (SocketException ex) when (
+                    ex.SocketErrorCode == SocketError.ConnectionReset ||
+                    ex.SocketErrorCode == SocketError.ConnectionAborted ||
+                    ex.SocketErrorCode == SocketError.Shutdown)
+                {
+                    throw new SshConnectionException("Connection lost", DisconnectReason.ConnectionLost);
                 }
 
                 if (sent == 0)
@@ -570,6 +613,14 @@ namespace FxSsh
         /// </summary>
         private Message LoadMessage(byte typeNumber, byte[] data, int packetLength)
         {
+            if (Log.IsEnabled(LogLevel.Trace))
+            {
+                var implemented0 = _messagesMetadata.ContainsKey(typeNumber);
+                Log.Trace(implemented0
+                    ? $"Recv msg={_messagesMetadata[typeNumber].Name} len={packetLength} seq={_inboundPacketSequence}"
+                    : $"Recv msg=Unknown({typeNumber}) len={packetLength} seq={_inboundPacketSequence}");
+            }
+
             var implemented = _messagesMetadata.ContainsKey(typeNumber);
             var message = implemented
                 ? (Message)Activator.CreateInstance(_messagesMetadata[typeNumber])
@@ -769,6 +820,11 @@ namespace FxSsh
             // (For the compressed path payloadWriter is null.)
             payloadWriter?.Dispose();
 
+            if (Log.IsEnabled(LogLevel.Trace))
+            {
+                Log.Trace($"Sent msg={message.GetType().Name} seq={_outboundPacketSequence}");
+            }
+
             lock (_locker)
             {
                 _outboundPacketSequence++;
@@ -795,6 +851,8 @@ namespace FxSsh
 
             if (kex)
             {
+                Log.Debug(force ? "Key exchange triggered (forced)."
+                    : "Key exchange triggered (traffic threshold reached).");
                 var kexInitMessage = LoadKexInitMessage();
                 _exchangeContext.ServerKexInitPayload = kexInitMessage.GetPacket();
 
@@ -895,6 +953,10 @@ namespace FxSsh
 
             _exchangeContext.ClientKexInitPayload = message.GetPacket();
 
+            Log.Info($"Negotiated: kex={_exchangeContext.KeyExchange}, hostkey={_exchangeContext.PublicKey}, " +
+                $"ctos={_exchangeContext.ClientEncryption}:{_exchangeContext.ClientHmac}:{_exchangeContext.ClientCompression}, " +
+                $"stoc={_exchangeContext.ServerEncryption}:{_exchangeContext.ServerHmac}:{_exchangeContext.ServerCompression}.");
+
             // RFC 8308: remember whether the client supports EXT_INFO.
             _clientAdvertisedExtInfo = message.PeerExtensions.Contains("ext-info-c");
         }
@@ -934,7 +996,10 @@ namespace FxSsh
             var exchangeHash = ComputeExchangeHash(kexAlg, hostKeyAndCerts, clientExchangeValue, serverExchangeValue, sharedSecret, false);
 
             if (SessionId == null)
+            {
                 SessionId = exchangeHash;
+                Log.Info($"Key exchange complete, session id {BitConverter.ToString(exchangeHash).Replace("-", "").Substring(0, 16)}…");
+            }
 
             _exchangeContext.NewAlgorithms = ComputeEncryption(kexAlg, hostKeyAlg, exchangeHash, clientCipher, serverCipher, clientHmac, serverHmac, sharedSecret);
 
@@ -964,7 +1029,10 @@ namespace FxSsh
             var exchangeHash = ComputeExchangeHash(kexAlg, hostKeyAndCerts, clientExchangeValue, serverExchangeValue, sharedSecret, true);
 
             if (SessionId == null)
+            {
                 SessionId = exchangeHash;
+                Log.Info($"Key exchange complete, session id {BitConverter.ToString(exchangeHash).Replace("-", "").Substring(0, 16)}…");
+            }
 
             _exchangeContext.NewAlgorithms = ComputeEncryption(kexAlg, hostKeyAlg, exchangeHash, clientCipher, serverCipher, clientHmac, serverHmac, sharedSecret);
 
@@ -986,6 +1054,7 @@ namespace FxSsh
             // the ACK for the client's NEWKEYS. Otherwise the client's NEWKEYS stays
             // un-ACKed and Nagle blocks the subsequent SERVICE_REQUEST until the
             // delayed-ACK timer fires (~40ms on Linux).
+            Log.Debug("New keys applied.");
             SendMessageInternal(new NewKeysMessage());
 
             _hasBlockedMessagesWaitHandle.Reset();
@@ -1123,8 +1192,11 @@ namespace FxSsh
                     _keepaliveTimer?.Dispose();
                     _keepaliveTimer = null;
                     _missedProbes = 0;
+                    Log.Debug("Keepalive probing disabled.");
                     return;
                 }
+
+                Log.Debug($"Keepalive probing enabled, idle threshold {idle}.");
 
                 _lastActivity ??= Stopwatch.StartNew();
 
@@ -1179,7 +1251,12 @@ namespace FxSsh
             var missed = Interlocked.Increment(ref _missedProbes);
             if (missed >= MaxMissedProbes)
             {
+                Log.Warn($"Keepalive probe unanswered {missed} times; disconnecting.");
                 Disconnect(DisconnectReason.ByApplication, "Keepalive timeout.");
+            }
+            else
+            {
+                Log.Debug($"Keepalive probe {missed}/{MaxMissedProbes} unanswered.");
             }
         }
 

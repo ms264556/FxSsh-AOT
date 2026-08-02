@@ -1,4 +1,5 @@
-﻿using System;
+using FxSsh.Logging;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
@@ -49,6 +50,8 @@ namespace FxSsh
                 BeginAcceptSocket();
 
                 _started = true;
+
+                Log.Info($"SSH server listening on {StartingInfo.LocalAddress}:{StartingInfo.Port}.");
             }
         }
 
@@ -64,6 +67,8 @@ namespace FxSsh
 
                 _isDisposed = true;
                 _started = false;
+
+                Log.Info("SSH server stopped.");
 
                 foreach (var session in _sessions.ToArray())
                 {
@@ -97,8 +102,9 @@ namespace FxSsh
             {
                 return;
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Fail("Listener accept failed.", ex);
                 if (_started)
                     BeginAcceptSocket();
             }
@@ -111,6 +117,7 @@ namespace FxSsh
                 var socket = _listenser.EndAcceptSocket(ar);
                 Task.Factory.StartNew(() =>
                 {
+                    var remote = socket.RemoteEndPoint?.ToString() ?? "?";
                     var session = new Session(socket, _hostKey, StartingInfo.ServerBanner);
                     session.Disconnected += (ss, ee) =>
                     {
@@ -120,23 +127,37 @@ namespace FxSsh
                         _sessions.Add(session);
                     try
                     {
+                        Log.Info($"Session accepted from {remote}.");
                         ConnectionAccepted?.Invoke(this, session);
+                        Log.Debug($"Session {remote} establishing protocol…");
                         session.EstablishConnection();
                     }
                     catch (SshConnectionException ex)
                     {
+                        if (ex.DisconnectReason == DisconnectReason.ConnectionLost)
+                        {
+                            // Peer closed/reset the TCP connection (e.g. normal
+                            // exit after our channel teardown) — not an error.
+                            Log.Debug($"Session {remote} connection closed: {ex.Message}");
+                        }
+                        else
+                        {
+                            Log.Warn($"Session {remote} aborted: {ex.Message}");
+                        }
                         session.Disconnect(ex.DisconnectReason, ex.Message);
                         ExceptionRaised?.Invoke(this, ex);
                     }
                     catch (Exception ex)
                     {
+                        Log.Fail($"Session {remote} failed.", ex);
                         session.Disconnect();
                         ExceptionRaised?.Invoke(this, ex);
                     }
                 }, TaskCreationOptions.LongRunning);
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Fail("Accept callback failed.", ex);
             }
             finally
             {

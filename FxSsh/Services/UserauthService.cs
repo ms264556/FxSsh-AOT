@@ -1,4 +1,5 @@
-﻿using FxSsh.Messages;
+﻿using FxSsh.Logging;
+using FxSsh.Messages;
 using FxSsh.Messages.UserAuth;
 using System;
 
@@ -30,6 +31,8 @@ namespace FxSsh.Services
 
         private void HandleMessage(RequestMessage message)
         {
+            var username = string.IsNullOrEmpty(message.Username) ? "?" : message.Username;
+            Log.Info($"Auth attempt: method={message.MethodName} user={username}.");
             switch (message.MethodName)
             {
                 case "none" when EnableNoneAuth:
@@ -46,6 +49,7 @@ namespace FxSsh.Services
                     break;
                 case "hostbased":
                 default:
+                    Log.Debug($"Unsupported auth method: {message.MethodName}.");
                     _session.SendMessage(new FailureMessage());
                     break;
             }
@@ -62,6 +66,7 @@ namespace FxSsh.Services
             }
             if (verifed)
             {
+                Log.Info($"Auth succeeded: none, user {message.Username}.");
                 _session.RegisterService(message.ServiceName, args);
                 Succeed?.Invoke(this, message.ServiceName);
                 _session.SendMessage(new SuccessMessage());
@@ -69,6 +74,7 @@ namespace FxSsh.Services
             }
             else
             {
+                Log.Warn($"Auth failed: none, user {message.Username}.");
                 _session.SendMessage(new FailureMessage());
             }
         }
@@ -86,6 +92,7 @@ namespace FxSsh.Services
 
             if (verifed)
             {
+                Log.Info($"Auth succeeded: password, user {message.Username}.");
                 _session.RegisterService(message.ServiceName, args);
 
                 Succeed?.Invoke(this, message.ServiceName);
@@ -95,6 +102,7 @@ namespace FxSsh.Services
             }
             else
             {
+                Log.Warn($"Auth failed: password, user {message.Username}.");
                 _session.SendMessage(new FailureMessage());
             }
         }
@@ -112,14 +120,18 @@ namespace FxSsh.Services
                 UserAuth?.Invoke(this, args);
                 verifed = args.Result;
 
+                Log.Info($"Public key auth: user={message.Username} alg={message.KeyAlgorithmName} fp={args.Fingerprint}.");
+
                 if (!verifed)
                 {
+                    Log.Warn($"Public key auth rejected by host policy: user {message.Username}.");
                     _session.SendMessage(new FailureMessage());
                     return;
                 }
 
                 if (!message.HasSignature)
                 {
+                    Log.Debug("Public key accepted, awaiting signature.");
                     _session.SendMessage(new PublicKeyOkMessage { KeyAlgorithmName = message.KeyAlgorithmName, PublicKey = message.PublicKey });
                     return;
                 }
@@ -135,16 +147,19 @@ namespace FxSsh.Services
 
                 if (!verifed)
                 {
+                    Log.Warn($"Public key signature verification failed: user {message.Username}.");
                     _session.SendMessage(new FailureMessage());
                     return;
                 }
 
+                Log.Info($"Auth succeeded: publickey, user {message.Username}.");
                 _session.RegisterService(message.ServiceName, args);
                 Succeed?.Invoke(this, message.ServiceName);
                 _session.SendMessage(new SuccessMessage());
             }
             else
             {
+                Log.Warn($"Unsupported key algorithm: {message.KeyAlgorithmName}.");
                 _session.SendMessage(new FailureMessage());
             }
         }

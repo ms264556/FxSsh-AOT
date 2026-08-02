@@ -1,4 +1,5 @@
-﻿using FxSsh.Messages;
+using FxSsh.Logging;
+using FxSsh.Messages;
 using FxSsh.Messages.Connection;
 using System;
 using System.Collections.Concurrent;
@@ -113,6 +114,7 @@ namespace FxSsh.Services
                     HandleMessage(forwardMsg);
                     break;
                 default:
+                    Log.Warn($"Unknown channel type: {message.ChannelType}.");
                     _session.SendMessage(new ChannelOpenFailureMessage
                     {
                         RecipientChannel = message.SenderChannel,
@@ -189,6 +191,7 @@ namespace FxSsh.Services
             TcpForwardRequestReceived?.Invoke(this, args);
             if (!args.Accepted)
             {
+                Log.Warn($"Reverse forward {address}:{port} rejected by host policy.");
                 if (message.WantReply)
                     _session.SendMessage(new RequestFailureMessage());
                 return;
@@ -202,11 +205,13 @@ namespace FxSsh.Services
             }
             catch
             {
+                Log.Fail($"Reverse forward {address}:{port} failed to start.");
                 if (message.WantReply)
                     _session.SendMessage(new RequestFailureMessage());
                 return;
             }
 
+            Log.Info($"Reverse forward bound at {fwd.BoundAddress}:{fwd.BoundPort}.");
             lock (_locker)
                 _forwarders[(fwd.BoundAddress, fwd.BoundPort)] = fwd;
 
@@ -264,11 +269,13 @@ namespace FxSsh.Services
 
             if (fwd == null)
             {
+                Log.Warn($"Cancel reverse forward {address}:{port} not found.");
                 if (message.WantReply)
                     _session.SendMessage(new RequestFailureMessage());
                 return;
             }
 
+            Log.Debug($"Cancel reverse forward {address}:{port}.");
             try { fwd.Dispose(); } catch { }
 
             if (message.WantReply)
@@ -361,6 +368,7 @@ namespace FxSsh.Services
 
         private void HandleMessage(DirectTcpIpMessage message)
         {
+            Log.Info($"Direct TCP forward requested: {message.Host}:{message.Port}.");
             var channel = HandleChannelOpenMessage(message);
             var args = new TcpRequestArgs(channel,
                 message.Host,
@@ -428,6 +436,7 @@ namespace FxSsh.Services
                     }
                     break;
                 default:
+                    Log.Warn($"Unknown channel request: {message.RequestType}.");
                     if (message.WantReply)
                         _session.SendMessage(new ChannelFailureMessage
                         {
@@ -466,12 +475,16 @@ namespace FxSsh.Services
 
         private void HandleMessage(ChannelDataMessage message)
         {
+            if (Log.IsEnabled(LogLevel.Trace))
+                Log.Trace($"Channel data: server-id={message.RecipientChannel} bytes={message.Data.Length}");
             var channel = FindChannelByServerId<Channel>(message.RecipientChannel);
             channel.OnData(message.Data);
         }
 
         private void HandleMessage(ChannelWindowAdjustMessage message)
         {
+            if (Log.IsEnabled(LogLevel.Trace))
+                Log.Trace($"Window adjust: channel={message.RecipientChannel} delta={message.BytesToAdd}");
             var channel = FindChannelByServerId<Channel>(message.RecipientChannel);
             channel.ClientAdjustWindow(message.BytesToAdd);
         }
@@ -502,6 +515,8 @@ namespace FxSsh.Services
                 message.MaximumPacketSize,
                 (uint)Interlocked.Increment(ref _serverChannelCounter));
 
+            Log.Info($"Channel opened: type={message.ChannelType} client-id={message.SenderChannel} server-id={channel.ServerChannelId}.");
+
             lock (_locker)
                 _channels.Add(channel);
 
@@ -521,6 +536,7 @@ namespace FxSsh.Services
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
+            Log.Info($"Shell requested on channel {channel.ServerChannelId}.");
             var args = new CommandRequestedArgs(channel, "shell", null, _auth);
             CommandOpened?.Invoke(this, args);
 
@@ -535,6 +551,7 @@ namespace FxSsh.Services
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
+            Log.Info($"Exec requested on channel {channel.ServerChannelId}: \"{message.Command}\".");
             var args = new CommandRequestedArgs(channel, "exec", message.Command, _auth);
             CommandOpened?.Invoke(this, args);
 
@@ -549,6 +566,7 @@ namespace FxSsh.Services
         {
             var channel = FindChannelByServerId<SessionChannel>(message.RecipientChannel);
 
+            Log.Info($"Subsystem requested on channel {channel.ServerChannelId}: {message.Name}.");
             var args = new CommandRequestedArgs(channel, "subsystem", message.Name, _auth);
             CommandOpened?.Invoke(this, args);
 

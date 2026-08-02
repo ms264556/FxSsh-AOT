@@ -1,4 +1,5 @@
-﻿using FxSsh.Messages.Connection;
+﻿using FxSsh.Logging;
+using FxSsh.Messages.Connection;
 using System;
 using System.Threading;
 
@@ -206,6 +207,8 @@ namespace FxSsh.Services
 
         internal void OnData(ReadOnlyMemory<byte> data)
         {
+            if (Log.IsEnabled(LogLevel.Trace))
+                Log.Trace($"Channel {ServerChannelId} received {data.Length} bytes.");
             ServerAttemptAdjustWindow((uint)data.Length);
 
             DataReceived?.Invoke(this, data);
@@ -213,6 +216,7 @@ namespace FxSsh.Services
 
         internal void OnEof()
         {
+            Log.Debug($"Channel {ServerChannelId} EOF received.");
             ClientMarkedEof = true;
 
             EofReceived?.Invoke(this, EventArgs.Empty);
@@ -220,6 +224,7 @@ namespace FxSsh.Services
 
         internal void OnClose()
         {
+            Log.Debug($"Channel {ServerChannelId} close received.");
             ClientClosed = true;
 
             CloseReceived?.Invoke(this, EventArgs.Empty);
