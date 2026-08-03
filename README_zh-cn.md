@@ -1,60 +1,66 @@
 ## FxSsh
-FxSsh is a lightweight [SSH](https://en.wikipedia.org/wiki/Secure_Shell) server side library.
+
+FxSsh 是一个轻量级的 [SSH](https://en.wikipedia.org/wiki/Secure_Shell) 服务端库。
 
 ---
+
 ### Nuget
+
 [![NuGet version](https://badge.fury.io/nu/FxSsh.svg)](https://www.nuget.org/packages/FxSsh/)
 
 `PM> Install-Package FxSsh`
 
-Target `net8.0`
+目标框架 `net8.0`
 
-### RFCs
-FxSsh adheres to the following RFC documents
-- [RFC4250](https://tools.ietf.org/html/rfc4250)  Protocol Assigned Numbers
-- [RFC4251](https://tools.ietf.org/html/rfc4251)  Protocol Architecture
-- [RFC4252](https://tools.ietf.org/html/rfc4252)  Authentication Protocol
-- [RFC4253](https://tools.ietf.org/html/rfc4253)  Transport Layer Protocol
-- [RFC4254](https://tools.ietf.org/html/rfc4254)  Connection Protocol
-- [RFC4344](https://tools.ietf.org/html/rfc4344)  Transport Layer Encryption Modes
-- [RFC5647](https://tools.ietf.org/html/rfc5647)  AES Galois Counter Mode for the Secure Shell Transport Layer Protocol
-- [RFC5656](https://tools.ietf.org/html/rfc5656)  Elliptic Curve Algorithm Integration
-- [RFC6668](https://tools.ietf.org/html/rfc6668)  SHA-2 Data Integrity Algorithms
-- [RFC8308](https://tools.ietf.org/html/rfc8308)  Extension Negotiation in the Secure Shell (SSH) Protocol
-- [RFC8332](https://tools.ietf.org/html/rfc8332)  Use of RSA Keys with SHA-2
-- [draft-ietf-secsh-filexfer-02](https://tools.ietf.org/html/draft-ietf-secsh-filexfer-02)  SSH File Transfer Protocol (sftp version 3)
+### RFC 文档
 
-### Supported Algorithms
+FxSsh 遵循以下 RFC 文档：
 
-| **Category**          | **Algorithms**                                                                |
-|-----------------------|-------------------------------------------------------------------------------|
-| **Public Key**        | RSA family: `rsa-sha2-256`, `rsa-sha2-512`<br>ECDsa family: `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521` |
-| **Key Exchange (KEX)**| DH family: `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group18-sha512`<br>ECDH family: `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521` |
-| **Encryption**        | `aes256-ctr`, `aes128-gcm@openssh.com`, `aes256-gcm@openssh.com` |
-| **MAC**               | `hmac-sha2-256`, `hmac-sha2-512`, `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com` |
-| **Compression**       | `none`                                                                        |
+- [RFC4250](https://tools.ietf.org/html/rfc4250)  协议分配号
+- [RFC4251](https://tools.ietf.org/html/rfc4251)  协议架构
+- [RFC4252](https://tools.ietf.org/html/rfc4252)  认证协议
+- [RFC4253](https://tools.ietf.org/html/rfc4253)  传输层协议
+- [RFC4254](https://tools.ietf.org/html/rfc4254)  连接协议
+- [RFC4344](https://tools.ietf.org/html/rfc4344)  传输层加密模式
+- [RFC5647](https://tools.ietf.org/html/rfc5647)  SSH 传输层协议的 AES Galois 计数器模式
+- [RFC5656](https://tools.ietf.org/html/rfc5656)  椭圆曲线算法集成
+- [RFC6668](https://tools.ietf.org/html/rfc6668)  SHA-2 数据完整性算法
+- [RFC8308](https://tools.ietf.org/html/rfc8308)  SSH 协议扩展协商
+- [RFC8332](https://tools.ietf.org/html/rfc8332)  RSA 密钥与 SHA-2 的使用
+- [draft-ietf-secsh-filexfer-02](https://tools.ietf.org/html/draft-ietf-secsh-filexfer-02)  SSH 文件传输协议（sftp 版本 3）
 
-### Supported Services
+### 支持的算法
 
-| **Service**        | **Details**                                                             |
-|--------------------|-------------------------------------------------------------------------|
-| **Authentication** | `publickey`, `password`<br>`none` (optional, opt-in via `EnableNoneAuth`)          |
-| **Connection**     | `session` (e.g., exec, shell)<br>`direct-tcpip`, `forwarded-tcpip`<br>`tcpip-forward` / `cancel-tcpip-forward` (reverse port forwarding)<br>`keepalive@openssh.com` (global request) |
-| **subsystem**      | `sftp (version 3)`                                                      |
+| **类别**            | **算法**                                                                                  |
+|---------------------|-------------------------------------------------------------------------------------------|
+| **公钥**            | RSA 系列：`rsa-sha2-256`、`rsa-sha2-512`<br>ECDsa 系列：`ecdsa-sha2-nistp256`、`ecdsa-sha2-nistp384`、`ecdsa-sha2-nistp521` |
+| **密钥交换（KEX）** | DH 系列：`diffie-hellman-group14-sha256`、`diffie-hellman-group16-sha512`、`diffie-hellman-group18-sha512`<br>ECDH 系列：`ecdh-sha2-nistp256`、`ecdh-sha2-nistp384`、`ecdh-sha2-nistp521` |
+| **加密**            | `aes256-ctr`、`aes128-gcm@openssh.com`、`aes256-gcm@openssh.com`                          |
+| **MAC**             | `hmac-sha2-256`、`hmac-sha2-512`、`hmac-sha2-256-etm@openssh.com`、`hmac-sha2-512-etm@openssh.com` |
+| **压缩**            | `none`                                                                                    |
 
-### Tested Clients
+### 支持的服务
 
-| **Client**      | **Version**                                     |
-|-----------------|-------------------------------------------------|
-| OpenSSH         | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`     |
-| PuTTY           | `Release 0.82`                                  |
-| WinSCP          | `6.3.6` (sftp only)                             |
+| **服务**            | **详情**                                                                                   |
+|---------------------|-------------------------------------------------------------------------------------------|
+| **认证**            | `publickey`、`password`<br>`none`（可选，通过 `EnableNoneAuth` 启用）                      |
+| **连接**            | `session`（如 exec、shell）<br>`direct-tcpip`、`forwarded-tcpip`<br>`tcpip-forward` / `cancel-tcpip-forward`（反向端口转发）<br>`keepalive@openssh.com`（全局请求） |
+| **子系统**          | `sftp（版本 3）`                                                                          |
 
-### Performance Benchmarks
+### 已测试的客户端
 
-A comprehensive automated test report is available that demonstrates the full capabilities of this project: [benchmark_report.md](https://github.com/Aimeast/FxSsh/blob/dev/benchmark_report.md)
+| **客户端**          | **版本**                                               |
+|---------------------|--------------------------------------------------------|
+| OpenSSH             | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`           |
+| PuTTY               | `Release 0.82`                                        |
+| WinSCP              | `6.3.6`（仅 sftp）                                    |
 
-### Sample code
+### 性能测试
+
+这里有一份完整的自动化测试报告，展示了本项目的全部能力。[benchmark_report_zh-cn.md](https://github.com/Aimeast/FxSsh/blob/dev/benchmark_report_zh-cn.md)
+
+### 示例代码
+
 ```cs
 static int windowWidth, windowHeight;
 
@@ -152,7 +158,7 @@ static void e_ServiceRegistered(object sender, SshService e)
     if (e is UserAuthService)
     {
         var service = (UserAuthService)e;
-        // WARNING: Enabling "none" auth poses a high security risk. Please ensure you understand the risks before using it.
+        // 警告：启用 "none" 认证存在极高的安全风险。请确保在使用前充分了解风险。
         service.EnableNoneAuth = true;
         service.UserAuth += service_UserAuth;
     }
@@ -222,8 +228,8 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
 
     if (e.ShellType == "shell")
     {
-        // requirements: Windows 10 RedStone 5, 1809
-        // also, you can call powershell.exe
+        // 要求：Windows 10 RedStone 5, 1809
+        // 也可以调用 powershell.exe
         var terminal = new Terminal("cmd.exe", windowWidth, windowHeight);
 
         e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
@@ -264,18 +270,20 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
 }
 ```
 
-### Generate private key
+### 生成私钥
+
 ```cs
-KeyGenerator.GenerateRsaKeyPem(2048); \\ generate rsa key with 2048 bits
-KeyGenerator.GenerateECDsaKeyPem("nistp256"); \\ generate ecdsa key with curve nistp256
-KeyGenerator.ConvertRsaBase64KeyToPem("base64"); \\ convert old rsa base64 key to pem format
+KeyGenerator.GenerateRsaKeyPem(2048);   // 生成 2048 位的 RSA 密钥
+KeyGenerator.GenerateECDsaKeyPem("nistp256");   // 生成曲线 nistp256 的 ECDSA 密钥
+KeyGenerator.ConvertRsaBase64KeyToPem("base64");   // 将旧的 RSA Base64 密钥转换为 PEM 格式
 ```
 
 ---
-### Acknowledgements from others
-As noted in their own documentation, significant portions of Microsoft's
-[Dev Tunnels SSH](https://github.com/microsoft/dev-tunnels-ssh/tree/main/src/cs/Ssh#acknowledgements)
-library were originally derived from FxSsh.
 
-### License
-The MIT license
+### 来自其他项目的致谢
+
+根据其自身文档所述，微软的 [Dev Tunnels SSH](https://github.com/microsoft/dev-tunnels-ssh/tree/main/src/cs/Ssh#acknowledgements) 库的很大一部分最初源自 FxSsh。
+
+### 许可证
+
+MIT 许可证
