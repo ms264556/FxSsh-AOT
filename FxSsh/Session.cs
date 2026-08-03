@@ -72,6 +72,15 @@ namespace FxSsh
         private ConcurrentQueue<Message> _blockedMessages = new();
         private EventWaitHandle _hasBlockedMessagesWaitHandle = new ManualResetEvent(true);
 
+        // Reusable outbound buffers. SendMessageInternal is always serialized
+        // (under _locker via SendMessage, or inside the NEWKEYS
+        // blocked-message window), so these can be reused across packets with
+        // zero per-packet heap allocation:
+        //   _sendScratchBuffer — plaintext frame [packet_length][padding_length][payload][padding]
+        //   _sendBuffer       — final wire packet (ciphertext + tag/MAC)
+        private readonly byte[] _sendScratchBuffer = new byte[4 + MaximumPacketLength + 255];
+        private readonly byte[] _sendBuffer = new byte[4 + MaximumPacketLength + 255 + 64];
+
         public string ServerVersion { get; private set; }
         public string ClientVersion { get; private set; }
         public byte[] SessionId { get; private set; }
@@ -664,24 +673,19 @@ namespace FxSsh
         {
             var useAlg = _algorithms != null;
             var isAead = useAlg && _algorithms.ServerEncryption.IsAead;
+            // The "none" compression hot path (the bulk forwarding case) is an
+            // identity transform: writing the message payload straight into a
+            // pooled writer skips the intermediate byte[] that
+            // message.GetPacket() would allocate. Only a real compressor (which
+            // returns its own byte[]) produces a standalone payload array.
+            var identityCompression = useAlg && _algorithms.ServerCompression.IsIdentity;
 
             var blockSize = (byte)(useAlg ? Math.Max(8, _algorithms.ServerEncryption.BlockBytesSize) : 8);
 
-            // Build the message payload (MessageType + fields) directly into
-            // a pooled-buffer writer. With useAlg the compressor may still
-            // return its own byte[] (out of our scope), but the no-compression
-            // path — the hot forwarding case — now produces zero intermediate
-            // arrays: payload stays inside the pooled writer until framed.
-            //
-            // payload is either the writer ( uncompressed, to be framed in
-            // place by TryWriteTo) or a byte[] from the compressor. We treat
-            // both uniformly via a small abstraction: a (byte[] array, int
-            // length) pair where array is null means "still in the writer".
             SshDataWriter payloadWriter = null;
             byte[] payload = null;
             int payloadLength;
-
-            if (useAlg)
+            if (useAlg && !identityCompression)
             {
                 // Compressor returns a byte[]; keep that array as the payload.
                 payload = _algorithms.ServerCompression.Compress(message.GetPacket());
@@ -720,105 +724,90 @@ namespace FxSsh
 
             var packetLength = (uint)payloadLength + paddingLength + 1;
 
-            var padding = new byte[paddingLength];
-            RandomNumberGenerator.Fill(padding);
-
-            // Frame the packet: [packet_length(4)][padding_length(1)][payload][padding]
-            // The framed length is 5 + payloadLength + paddingLength; for the
-            // uncompressed path we write straight into a freshly rented pooled
-            // buffer of exactly this size (one rent, no MemoryStream, no
-            // intermediate payload array). For the compressed path payload is
-            // already a byte[], so we build the frame the same way via a writer.
-            var frame = new SshDataWriter(5 + payloadLength + paddingLength);
-            frame.Write(packetLength);
-            frame.Write(paddingLength);
+            // Frame the packet straight into the session's reusable plaintext
+            // buffer: [packet_length(4)][padding_length(1)][payload][padding].
+            // No per-packet frame array, no padding array, no ToByteArray —
+            // the frame lives in _sendScratchBuffer for the duration of the
+            // (serialized) send, then is overwritten by the next packet.
+            var framedLength = 4 + (int)packetLength;
+            var frame = _sendScratchBuffer.AsSpan(0, framedLength);
+            frame[0] = (byte)(packetLength >> 24);
+            frame[1] = (byte)(packetLength >> 16);
+            frame[2] = (byte)(packetLength >> 8);
+            frame[3] = (byte)packetLength;
+            frame[4] = paddingLength;
             if (payload != null)
-                frame.WriteBytes(payload);
+                payload.AsSpan().CopyTo(frame.Slice(5));
             else
-                // Copy the pooled writer's bytes into the frame writer. This
-                // is the one unavoidable copy on the uncompressed path: the
-                // payload lived in its own pooled rental, the frame lives in
-                // another. (Pre-B we had TWO such copies plus a MemoryStream;
-                // now it's one.)
-                frame.WriteBytes(payloadWriter.AsMemory());
-            frame.WriteBytes(padding);
-            var framed = frame.ToByteArray();
+                // Copy the pooled writer's bytes into the frame; TryWriteTo
+                // also returns the writer's rental to the pool, so subsequent
+                // Dispose is a no-op.
+                payloadWriter.TryWriteTo(frame.Slice(5));
+            RandomNumberGenerator.Fill(frame.Slice(5 + payloadLength, paddingLength));
 
-            // From here `framed` replaces the old `payload` variable: it is the
-            // complete plaintext packet [packet_length][padding_length][payload][padding].
-            var plaintextPacket = framed;
+            payloadWriter?.Dispose();
 
+            ReadOnlySpan<byte> wire;
             if (useAlg)
             {
                 if (isAead)
                 {
                     // RFC 5647 section 3 + 7.3 AEAD layout:
                     // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
-                    // No separate MAC - the GCM tag is the authenticator. Per
-                    // RFC 5647 section 7.3 the 4-byte plaintext packet_length is fed to
-                    // GCM as Additional Authenticated Data (authenticated but not
-                    // encrypted), so it is covered by the tag. OpenSSH/OpenSSL
-                    // does exactly this in cipher.c (EVP_Cipher with aadlen=4).
-                    //
-                    // Encrypt straight into the final packet buffer: the 4-byte
-                    // plaintext length is the AAD (Span slice, no allocation),
-                    // ciphertext + tag land directly in packet[4..], so no
-                    // intermediate ciphertext array or BlockCopy is needed.
+                    // The 4-byte plaintext packet_length is GCM's AAD
+                    // (authenticated but not encrypted). Encrypt straight into
+                    // the reusable _sendBuffer — no intermediate ciphertext
+                    // array per packet.
                     var tagBytes = _algorithms.ServerEncryption.TagBytes;
-                    var cipherLen = plaintextPacket.Length - 4;
-                    var packet = new byte[4 + cipherLen + tagBytes];
-                    // RFC 5647 section 3: the wire layout is
-                    // [packet_length(4, plaintext)][ciphertext][tag(16)]. The
-                    // 4-byte packet_length is GCM's AAD (authenticated but not
-                    // encrypted, passed to EncryptAead below) AND must still be
-                    // transmitted in plaintext -- copy it into packet[0..4] or
-                    // the peer reads a zero length and dies with
-                    // "Bad packet length 0" right after NEWKEYS.
-                    plaintextPacket.AsSpan(0, 4).CopyTo(packet.AsSpan(0, 4));
+                    var cipherLen = framedLength - 4;
+                    var packet = _sendBuffer.AsSpan(0, 4 + cipherLen + tagBytes);
+                    frame.Slice(0, 4).CopyTo(packet);
                     _algorithms.ServerEncryption.EncryptAead(
-                        plaintextPacket.AsSpan(0, 4),
-                        plaintextPacket.AsSpan(4),
-                        packet.AsSpan(4));
-                    plaintextPacket = packet;
+                        frame.Slice(0, 4),
+                        frame.Slice(4),
+                        packet.Slice(4));
+                    wire = packet;
                 }
                 else if (_algorithms.ServerHmacIsEtm)
                 {
                     // OpenSSH Encrypt-then-MAC (RFC 6668): packet_length is NOT
                     // encrypted. Layout: [length(4, plaintext)][encrypt(padding_length||payload||padding)][MAC].
                     // MAC covers seq || length || ciphertext.
-                    // Encrypt the body in place (plaintextPacket[4..] becomes
-                    // ciphertext) via the offset-capable Transform overload, so
-                    // no scratch ciphertext array is allocated per packet.
+                    // Encrypt the body in place inside the scratch buffer
+                    // (frame[4..] becomes ciphertext), compute the MAC into
+                    // stackalloc, then assemble the wire packet in the reusable
+                    // _sendBuffer — no per-packet arrays.
                     var macLength = _algorithms.ServerHmac.DigestLength;
-                    var cipherLen = plaintextPacket.Length - 4;
-                    _algorithms.ServerEncryption.Transform(plaintextPacket, 4, cipherLen, plaintextPacket, 4);
+                    var cipherLen = framedLength - 4;
+                    _algorithms.ServerEncryption.Transform(_sendScratchBuffer, 4, cipherLen, _sendScratchBuffer, 4);
 
                     Span<byte> mac = stackalloc byte[macLength];
-                    ComputeHmac(_algorithms.ServerHmac, plaintextPacket.AsSpan(0, 4), plaintextPacket.AsSpan(4, cipherLen), _outboundPacketSequence, mac);
+                    ComputeHmac(_algorithms.ServerHmac, frame.Slice(0, 4), frame.Slice(4, cipherLen), _outboundPacketSequence, mac);
 
-                    var packet = new byte[4 + cipherLen + macLength];
-                    Buffer.BlockCopy(plaintextPacket, 0, packet, 0, 4 + cipherLen);
-                    mac.CopyTo(packet.AsSpan(4 + cipherLen));
-                    plaintextPacket = packet;
+                    var packet = _sendBuffer.AsSpan(0, 4 + cipherLen + macLength);
+                    frame.Slice(0, 4 + cipherLen).CopyTo(packet);
+                    mac.CopyTo(packet.Slice(4 + cipherLen));
+                    wire = packet;
                 }
                 else
                 {
                     // RFC 4253: the whole packet is encrypted; MAC covers the plaintext.
                     var macLength = _algorithms.ServerHmac.DigestLength;
-                    var encrypted = new byte[plaintextPacket.Length + macLength];
-                    _algorithms.ServerEncryption.Transform(plaintextPacket, encrypted);
+                    var encrypted = _sendBuffer.AsSpan(0, framedLength + macLength);
+                    _algorithms.ServerEncryption.Transform(_sendScratchBuffer, framedLength, _sendBuffer);
                     Span<byte> mac = stackalloc byte[macLength];
-                    ComputeHmac(_algorithms.ServerHmac, plaintextPacket, ReadOnlySpan<byte>.Empty, _outboundPacketSequence, mac);
-                    mac.CopyTo(encrypted.AsSpan(plaintextPacket.Length));
-                    plaintextPacket = encrypted;
+                    ComputeHmac(_algorithms.ServerHmac, frame, ReadOnlySpan<byte>.Empty, _outboundPacketSequence, mac);
+                    mac.CopyTo(encrypted.Slice(framedLength));
+                    wire = encrypted;
                 }
             }
+            else
+            {
+                // Pre-KEX: no encryption; the plaintext frame goes out as-is.
+                wire = frame;
+            }
 
-            SocketWrite(plaintextPacket);
-
-            // Dispose the pooled writer now that the frame has absorbed it.
-            // (For the compressed path payloadWriter is null.)
-            payloadWriter?.Dispose();
+            SocketWrite(wire);
 
             if (Log.IsEnabled(LogLevel.Trace))
             {

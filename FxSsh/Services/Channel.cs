@@ -8,6 +8,9 @@ namespace FxSsh.Services
     public abstract class Channel
     {
         protected ConnectionService _connectionService;
+        // Kept for API compatibility; the send-window wait now uses a Monitor
+        // condition variable (_windowLocker), so this handle is never
+        // Set/WaitOne'd anymore. Close() still releases the kernel object.
         protected EventWaitHandle _sendingWindowWaitHandle = new ManualResetEvent(false);
         private readonly object _windowLocker = new object();
         private bool _forceClosed;
@@ -132,13 +135,29 @@ namespace FxSsh.Services
                 {
                     packetSize = Math.Min(Math.Min(ClientWindowSize, ClientMaxPacketSize), total);
                     if (packetSize > 0)
+                    {
                         ClientWindowSize -= packetSize;
-                }
-
-                if (packetSize == 0)
-                {
-                    _sendingWindowWaitHandle.WaitOne();
-                    continue;
+                    }
+                    else
+                    {
+                        // Peer's receive window is exhausted. Park on a Monitor
+                        // condition variable instead of the old
+                        // EventWaitHandle Set/Thread.Sleep(1)/Reset pulse:
+                        // the sleep ran on the ConnectionService message loop
+                        // (the single SSH receive thread) and capped throughput
+                        // at ~1000 packets/sec under sustained load. Monitor.Wait
+                        // releases the lock; ClientAdjustWindow PulseAll's the
+                        // moment the peer's WINDOW_ADJUST arrives, and
+                        // ForceClose PulseAll's to unblock us during teardown.
+                        // Re-check _forceClosed to keep the old "waiting on a
+                        // disposed handle throws" teardown semantics.
+                        Monitor.Wait(_windowLocker);
+                        if (_forceClosed)
+                            throw new ObjectDisposedException(nameof(Channel));
+                        // Window may still be 0 after a spurious wake; loop
+                        // around and re-evaluate packetSize.
+                        continue;
+                    }
                 }
 
                 // Zero-copy slice: ChannelDataMessage.Data is now a
@@ -240,13 +259,16 @@ namespace FxSsh.Services
         internal void ClientAdjustWindow(uint bytesToAdd)
         {
             lock (_windowLocker)
+            {
                 ClientWindowSize += bytesToAdd;
 
-            // pulse multithreadings in same time and unsignal until thread switched
-            // don't try to use AutoResetEvent
-            _sendingWindowWaitHandle.Set();
-            Thread.Sleep(1);
-            _sendingWindowWaitHandle.Reset();
+                // Wake every SendData loop parked on the window condition.
+                // Monitor.PulseAll (not Pulse) so all blocked senders re-check;
+                // the wake happens under the same lock, eliminating the old
+                // Set/Thread.Sleep(1)/Reset pulse that stalled the SSH receive
+                // thread once per WINDOW_ADJUST.
+                Monitor.PulseAll(_windowLocker);
+            }
         }
 
         private void ServerAttemptAdjustWindow(uint messageLength)
@@ -297,15 +319,21 @@ namespace FxSsh.Services
             // when the server side closes first, and OnClose() drives it again
             // when the client's CHANNEL_CLOSE arrives (or vice versa), plus
             // any external listener wired onto CloseReceived can re-enter it.
-            // The wait handle below is a single-use resource; Close() then Set()
-            // on a second pass throws ObjectDisposedException. Guard with a
-            // flag so teardown happens exactly once.
-            if (_forceClosed)
-                return;
-            _forceClosed = true;
+            // Guard with a flag so teardown happens exactly once.
+            lock (_windowLocker)
+            {
+                if (_forceClosed)
+                    return;
+                _forceClosed = true;
+
+                // Wake any SendData loop parked on the window condition; it
+                // re-checks _forceClosed and throws ObjectDisposedException,
+                // matching the previous "waiting on a closed handle" semantics.
+                Monitor.PulseAll(_windowLocker);
+            }
 
             _connectionService.RemoveChannel(this);
-            _sendingWindowWaitHandle.Set();
+
             _sendingWindowWaitHandle.Close();
         }
     }

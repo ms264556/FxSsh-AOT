@@ -4,6 +4,8 @@ namespace FxSsh.Algorithms
 {
     public class NoCompression : CompressionAlgorithm
     {
+        public override bool IsIdentity => true;
+
         public override byte[] Compress(byte[] input)
         {
             return input;
