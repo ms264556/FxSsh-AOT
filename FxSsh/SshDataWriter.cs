@@ -10,7 +10,7 @@ namespace FxSsh
     /// directly into a pooled buffer via <see cref="Span{byte}"/>, with O(1)
     /// amortized growth (capacity doubles, rented from the pool). When the
     /// caller actually needs the bytes, <see cref="ToByteArray"/> allocates
-    /// exactly one right-sized array and copies once — or, for callers that
+    /// exactly one right-sized array and copies once - or, for callers that
     /// already own a destination buffer, <see cref="TryWriteTo"/> copies with
     /// zero intermediate allocation.
     ///
@@ -32,7 +32,7 @@ namespace FxSsh
         {
             // Rent at least a reasonable chunk so the common small-message
             // path never grows. ArrayPool may hand back more than requested,
-            // which is fine — we track Length, not capacity.
+            // which is fine - we track Length, not capacity.
             _buffer = ArrayPool<byte>.Shared.Rent(Math.Max(1, expectedCapacity));
             _length = 0;
         }
@@ -165,7 +165,7 @@ namespace FxSsh
             ArgumentNullException.ThrowIfNull(str);
             ArgumentNullException.ThrowIfNull(encoding);
 
-            // Encode straight into the reserved slot — no intermediate
+            // Encode straight into the reserved slot - no intermediate
             // byte[] from encoding.GetBytes when the span overload exists.
             var byteCount = encoding.GetByteCount(str);
             WriteBinaryCore(encoding.GetBytes(str).AsMemory(), byteCount);
@@ -234,7 +234,7 @@ namespace FxSsh
         // Safety net: if a writer is dropped without Dispose/ToByteArray,
         // return the rented buffer to the pool rather than letting it leak
         // until the pool's own bucket eviction. GC.SuppressFinalize is called
-        // in the normal Dispose path below via the bool overload — kept
+        // in the normal Dispose path below via the bool overload - kept
         // simple here because this writer is sealed and short-lived.
         ~SshDataWriter()
         {

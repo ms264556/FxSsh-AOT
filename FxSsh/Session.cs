@@ -1,9 +1,4 @@
-﻿using FxSsh.Algorithms;
-using FxSsh.Logging;
-using FxSsh.Messages;
-using FxSsh.Messages.Connection;
-using FxSsh.Services;
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -14,6 +9,11 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using FxSsh.Algorithms;
+using FxSsh.Logging;
+using FxSsh.Messages;
+using FxSsh.Messages.Connection;
+using FxSsh.Services;
 
 namespace FxSsh
 {
@@ -24,10 +24,10 @@ namespace FxSsh
         internal const int MaximumSshPacketSize = LocalChannelDataPacketSize;
         internal const int InitialLocalWindowSize = LocalChannelDataPacketSize * 32;
         internal const int LocalChannelDataPacketSize = 1024 * 32;
-        // RFC 4253 §6.1: all implementations MUST be able to process packets with
+        // RFC 4253 section 6.1: all implementations MUST be able to process packets with
         // a total size of 35000 bytes or less; anything larger is rejected to
         internal const int MaximumPacketLength = 35000;
-        // RFC 4253 §6: minimum packet size is 16 bytes total, i.e. packet_length >= 12.
+        // RFC 4253 section 6: minimum packet size is 16 bytes total, i.e. packet_length >= 12.
         internal const int MinimumPacketLength = 12;
 
         private static readonly Dictionary<byte, Type> _messagesMetadata;
@@ -76,8 +76,8 @@ namespace FxSsh
         // (under _locker via SendMessage, or inside the NEWKEYS
         // blocked-message window), so these can be reused across packets with
         // zero per-packet heap allocation:
-        //   _sendScratchBuffer — plaintext frame [packet_length][padding_length][payload][padding]
-        //   _sendBuffer       — final wire packet (ciphertext + tag/MAC)
+        //   _sendScratchBuffer - plaintext frame [packet_length][padding_length][payload][padding]
+        //   _sendBuffer       - final wire packet (ciphertext + tag/MAC)
         private readonly byte[] _sendScratchBuffer = new byte[4 + MaximumPacketLength + 255];
         private readonly byte[] _sendBuffer = new byte[4 + MaximumPacketLength + 255 + 64];
 
@@ -297,7 +297,7 @@ namespace FxSsh
         /// <summary>
         /// A pooled receive buffer rented from <see cref="ArrayPool{byte}.Shared"/>
         /// by <see cref="SocketRead"/> and returned on Dispose. Callers must
-        /// <c>using</c> the result and consume the bytes before disposing —
+        /// <c>using</c> the result and consume the bytes before disposing -
         /// the exposed <see cref="Span"/>/<see cref="Memory"/> views are valid
         /// only until Dispose returns the rental to the pool.
         ///
@@ -343,15 +343,15 @@ namespace FxSsh
         /// <summary>
         /// Read exactly <paramref name="length"/> bytes from the socket into a
         /// pooled buffer (ArrayPool<byte>.Shared). Returns a ref struct that
-        /// returns the rental on Dispose — callers MUST <c>using</c> the result
+        /// returns the rental on Dispose - callers MUST <c>using</c> the result
         /// and consume the bytes before disposing. The pooled buffer may be
         /// larger than <paramref name="length"/>; consume via the returned
         /// Span/Memory views, not by indexing Buffer past Length.
         ///
         /// Replaces the previous <c>new byte[length]</c> per call. On the SSH
-        /// receive hot path this cuts one allocation per SocketRead call —
+        /// receive hot path this cuts one allocation per SocketRead call -
         /// AEAD: 2 calls (len + ciphertext), ETM: 3 calls, non-ETM: 4 calls
-        /// per packet — all now pooled rather than GC'd.
+        /// per packet - all now pooled rather than GC'd.
         /// </summary>
         private PooledReceiveBuffer SocketRead(int length)
         {
@@ -460,7 +460,7 @@ namespace FxSsh
 
             // AEAD (RFC 5647 section 3): layout [packet_length(4, plaintext)][ciphertext][tag(16)].
             // packet_length is plaintext (same as ETM) but covers only the
-            // ciphertext portion — NOT the tag. The GCM tag replaces the HMAC
+            // ciphertext portion - NOT the tag. The GCM tag replaces the HMAC
             // and authenticates the ciphertext (the plaintext length field is
             // validated separately as bounded by MaximumPacketLength).
             if (isAead)
@@ -726,7 +726,7 @@ namespace FxSsh
 
             // Frame the packet straight into the session's reusable plaintext
             // buffer: [packet_length(4)][padding_length(1)][payload][padding].
-            // No per-packet frame array, no padding array, no ToByteArray —
+            // No per-packet frame array, no padding array, no ToByteArray -
             // the frame lives in _sendScratchBuffer for the duration of the
             // (serialized) send, then is overwritten by the next packet.
             var framedLength = 4 + (int)packetLength;
@@ -756,7 +756,7 @@ namespace FxSsh
                     // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
                     // The 4-byte plaintext packet_length is GCM's AAD
                     // (authenticated but not encrypted). Encrypt straight into
-                    // the reusable _sendBuffer — no intermediate ciphertext
+                    // the reusable _sendBuffer - no intermediate ciphertext
                     // array per packet.
                     var tagBytes = _algorithms.ServerEncryption.TagBytes;
                     var cipherLen = framedLength - 4;
@@ -776,7 +776,7 @@ namespace FxSsh
                     // Encrypt the body in place inside the scratch buffer
                     // (frame[4..] becomes ciphertext), compute the MAC into
                     // stackalloc, then assemble the wire packet in the reusable
-                    // _sendBuffer — no per-packet arrays.
+                    // _sendBuffer - no per-packet arrays.
                     var macLength = _algorithms.ServerHmac.DigestLength;
                     var cipherLen = framedLength - 4;
                     _algorithms.ServerEncryption.Transform(_sendScratchBuffer, 4, cipherLen, _sendScratchBuffer, 4);
@@ -987,7 +987,7 @@ namespace FxSsh
             if (SessionId == null)
             {
                 SessionId = exchangeHash;
-                Log.Info($"Key exchange complete, session id {BitConverter.ToString(exchangeHash).Replace("-", "").Substring(0, 16)}…");
+                Log.Info($"Key exchange complete, session id {BitConverter.ToString(exchangeHash).Replace("-", "").Substring(0, 16)}...");
             }
 
             _exchangeContext.NewAlgorithms = ComputeEncryption(kexAlg, hostKeyAlg, exchangeHash, clientCipher, serverCipher, clientHmac, serverHmac, sharedSecret);
@@ -1020,7 +1020,7 @@ namespace FxSsh
             if (SessionId == null)
             {
                 SessionId = exchangeHash;
-                Log.Info($"Key exchange complete, session id {BitConverter.ToString(exchangeHash).Replace("-", "").Substring(0, 16)}…");
+                Log.Info($"Key exchange complete, session id {BitConverter.ToString(exchangeHash).Replace("-", "").Substring(0, 16)}...");
             }
 
             _exchangeContext.NewAlgorithms = ComputeEncryption(kexAlg, hostKeyAlg, exchangeHash, clientCipher, serverCipher, clientHmac, serverHmac, sharedSecret);
@@ -1325,7 +1325,7 @@ namespace FxSsh
             // AEAD (GCM) replaces the separate HMAC with an inline auth tag.
             // RFC 5647 section 6: the negotiated MAC name is still carried in KEX_INIT
             // and the MAC key is still derived for compatibility, but it MUST NOT
-            // be used to authenticate packets — the GCM tag does that. We skip
+            // be used to authenticate packets - the GCM tag does that. We skip
             // deriving the MAC key for the AEAD direction entirely (nothing reads
             // ClientHmac/ServerHmac when the corresponding cipher IsAead), and
             // leave the HmacAlgorithm slots null so any accidental use fails loud.
@@ -1394,10 +1394,10 @@ namespace FxSsh
         }
 
         /// <summary>
-        /// Compute the SSH packet MAC <c>seq ‖ a ‖ b</c> straight into
+        /// Compute the SSH packet MAC <c>seq || a || b</c> straight into
         /// <paramref name="destination"/> via the Span-based HMAC core
         /// (HmacAlgorithm.ComputeHash overload). Caller owns the destination
-        /// — typically a stackalloc Span sized to DigestLength, so the
+        /// - typically a stackalloc Span sized to DigestLength, so the
         /// per-packet MAC computation is now zero-allocation.
         /// </summary>
         private void ComputeHmac(HmacAlgorithm alg, ReadOnlySpan<byte> a, ReadOnlySpan<byte> b, uint seq, Span<byte> destination)

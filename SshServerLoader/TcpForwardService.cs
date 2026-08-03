@@ -24,10 +24,10 @@ namespace SshServerLoader
             _port = port;
         }
 
-        // DataReceived fires on the local socket→channel pump thread and
+        // DataReceived fires on the local socket->channel pump thread and
         // feeds Channel.SendData, which now takes ReadOnlyMemory<byte>. A
         // byte[] is implicitly convertible to ReadOnlyMemory<byte>, so keep
-        // the event payload as byte[] — the own-socket read buffer is the
+        // the event payload as byte[] - the own-socket read buffer is the
         // producer's to manage, and the channel slicing is zero-copy.
         public event EventHandler<byte[]> DataReceived;
         public event EventHandler CloseReceived;

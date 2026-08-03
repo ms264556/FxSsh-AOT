@@ -1,10 +1,10 @@
-using FxSsh.Logging;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using FxSsh.Logging;
 
 namespace FxSsh.Services
 {
@@ -109,10 +109,10 @@ namespace FxSsh.Services
             }
         }
 
-        /// <summary>Wire a forwarded channel to a socket: socket→channel data, channel close→socket close.</summary>
+        /// <summary>Wire a forwarded channel to a socket: socket->channel data, channel close->socket close.</summary>
         private void Bridge(Channel channel, Socket socket)
         {
-            Log.Debug($"Bridge established: channel {channel.ServerChannelId} ↔ {socket.RemoteEndPoint}.");
+            Log.Debug($"Bridge established: channel {channel.ServerChannelId} <-> {socket.RemoteEndPoint}.");
             lock (_bridgeLocker)
                 _bridges.Add((channel, socket));
 
@@ -126,7 +126,7 @@ namespace FxSsh.Services
             // The incoming ReadOnlyMemory is a slice over the SSH receive
             // buffer, which is recycled by the next ReceiveMessage on the
             // message-loop thread. The send thread runs asynchronously, so
-            // we MUST hand it an independent copy (ToArray) — the slice is
+            // we MUST hand it an independent copy (ToArray) - the slice is
             // not guaranteed live past the callback's return. This is the one
             // unavoidable copy on the inbound forwarding path, and it lives
             // exactly until socket.Send consumes it, then is GC'd.
@@ -157,7 +157,7 @@ namespace FxSsh.Services
                 catch { }
             };
 
-            // Socket → channel pump.
+            // Socket -> channel pump.
             Task.Run(() =>
             {
                 var buf = new byte[1024 * 32];

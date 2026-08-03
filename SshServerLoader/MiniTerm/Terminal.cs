@@ -1,9 +1,9 @@
-﻿using Microsoft.Win32.SafeHandles;
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
 using static MiniTerm.Native.ConsoleApi;
 using static MiniTerm.Native.PseudoConsoleApi;
 

@@ -19,7 +19,7 @@ namespace FxSsh.Messages.Connection
             // than ToArray()'ing into a fresh allocation. The packet buffer
             // is retained by Session.ReceiveMessage until LoadMessage returns,
             // which is synchronous here, so the slice stays valid for the
-            // downstream OnData → DataReceived → consumer pump all of which
+            // downstream OnData -> DataReceived -> consumer pump all of which
             // run on the same ConnectionService message loop thread before
             // the next ReceiveMessage reuses the buffer.
             Data = reader.ReadBinaryAsMemory();

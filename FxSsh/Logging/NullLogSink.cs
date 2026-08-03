@@ -2,7 +2,7 @@
 namespace FxSsh.Logging
 {
     /// <summary>
-    /// No-op log sink. The default destination — the library is completely
+    /// No-op log sink. The default destination - the library is completely
     /// silent (and zero cost) until the host configures a real sink.
     /// </summary>
     public sealed class NullLogSink : ILogSink

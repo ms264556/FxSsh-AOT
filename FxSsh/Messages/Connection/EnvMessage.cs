@@ -1,5 +1,5 @@
-﻿using FxSsh.Messages.Connection;
-using System.Text;
+﻿using System.Text;
+using FxSsh.Messages.Connection;
 
 namespace FxSsh.Messages
 {

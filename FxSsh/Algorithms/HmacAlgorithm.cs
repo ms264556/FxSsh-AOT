@@ -10,7 +10,7 @@ namespace FxSsh.Algorithms
     /// <see cref="HMACSHA256.HashData(ReadOnlySpan{byte}, ReadOnlySpan{byte}, Span{byte})"/> /
     /// <see cref="HMACSHA512.HashData(ReadOnlySpan{byte}, ReadOnlySpan{byte}, Span{byte})"/>
     /// Span APIs (.NET 8) for the hot per-packet path: each MAC is one
-    /// stateless invocation over a concatenated <c>seq ‖ a ‖ b</c> buffer,
+    /// stateless invocation over a concatenated <c>seq || a || b</c> buffer,
     /// with zero allocations on the caller-owned-destination path (the seq
     /// prefix is stackalloc'd; the body lives in an ArrayPool buffer rented
     /// and returned around the call).
@@ -40,7 +40,7 @@ namespace FxSsh.Algorithms
             // HashData is keyed by the raw key bytes, not by mutating the
             // algorithm instance's Key setter. Keep both the instance (for
             // DigestLength and algorithm-kind detection) and an independent
-            // reference to the key bytes (cache once — KeyedHashAlgorithm.Key
+            // reference to the key bytes (cache once - KeyedHashAlgorithm.Key
             // returns a fresh array on every read).
             _algorithm = algorithm;
             algorithm.Key = key;
@@ -67,7 +67,7 @@ namespace FxSsh.Algorithms
         }
 
         /// <summary>
-        /// Compute MAC over <c>seq ‖ a ‖ b</c> for SSH packet authentication
+        /// Compute MAC over <c>seq || a || b</c> for SSH packet authentication
         /// (RFC 4253 section 6.4), returning a fresh array. The hot per-packet
         /// MAC calls should prefer the Span overload
         /// <see cref="ComputeHash(ReadOnlySpan{byte}, ReadOnlySpan{byte}, uint, Span{byte})"/>
@@ -84,13 +84,13 @@ namespace FxSsh.Algorithms
         }
 
         /// <summary>
-        /// Compute the SSH packet MAC <c>seq ‖ a ‖ b</c> straight into
+        /// Compute the SSH packet MAC <c>seq || a || b</c> straight into
         /// <paramref name="destination"/>. Zero allocations when the caller
         /// owns the destination (e.g. a stackalloc span or an
         /// ArrayPool-rented slice). Throws if <paramref name="destination"/>
         /// is shorter than <see cref="DigestLength"/>.
         ///
-        /// The seq prefix is emitted by this method — callers pass only the
+        /// The seq prefix is emitted by this method - callers pass only the
         /// two MAC body segments (typically the plaintext packet_length and
         /// the ciphertext), matching how Session.ReceiveMessage splits the
         /// ETM/non-ETM MAC inputs.
@@ -102,9 +102,9 @@ namespace FxSsh.Algorithms
             ComputeHashCore(a, b, sequence, destination);
         }
 
-        // Core MAC: concat seq ‖ a ‖ b into a pooled buffer and invoke the
+        // Core MAC: concat seq || a || b into a pooled buffer and invoke the
         // stateless HMAC.HashData once. The concat is unavoidable because
-        // HMACSHA256/512.HashData takes a single contiguous source — .NET
+        // HMACSHA256/512.HashData takes a single contiguous source - .NET
         // offers no streaming HMAC Span API. The pooled rental is returned
         // in finally, so the hot path's only heap traffic is one rent + one
         // return (ArrayPool bookkeeping, not GC pressure).
@@ -126,7 +126,7 @@ namespace FxSsh.Algorithms
                 default:
                     // Fallback: streaming KeyedHashAlgorithm API (no Span
                     // overload exists for arbitrary KeyedHashAlgorithm). Used
-                    // only by hypothetical non-SHA2 keyed hashes — none exist
+                    // only by hypothetical non-SHA2 keyed hashes - none exist
                     // in the SSH algorithm registry today, but keeps the type
                     // honest. Retains the pre-Span allocations.
                     _algorithm.Initialize();
@@ -141,9 +141,9 @@ namespace FxSsh.Algorithms
             }
         }
 
-        // Concat seq ‖ a ‖ b into a pooled buffer and invoke the supplied
+        // Concat seq || a || b into a pooled buffer and invoke the supplied
         // HashData. SSH MAC inputs are bounded by MaximumPacketLength
-        // (~256KB), so a stack buffer is unsafe here — always rent from the
+        // (~256KB), so a stack buffer is unsafe here - always rent from the
         // pool. The rental is returned before return; a and b were already in
         // the receive buffer (hot path), so the copies here are the
         // unavoidable concat into the pooled slot, not an extra allocation.
@@ -171,7 +171,7 @@ namespace FxSsh.Algorithms
         // HMACSHA256/512.HashData both have the same shape:
         //   static int HashData(ReadOnlySpan<byte> key, ReadOnlySpan<byte> source, Span<byte> destination)
         // We wrap with a delegate whose key param is `in` only because the
-        // static API takes it by value — `in` lets us pass `_key` (a byte[])
+        // static API takes it by value - `in` lets us pass `_key` (a byte[])
         // implicitly converted to ReadOnlySpan<byte> at the call site without
         // an extra local.
         private delegate int HashDataDelegate(ReadOnlySpan<byte> key, ReadOnlySpan<byte> source, Span<byte> destination);

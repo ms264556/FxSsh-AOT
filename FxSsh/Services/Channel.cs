@@ -1,7 +1,7 @@
-﻿using FxSsh.Logging;
-using FxSsh.Messages.Connection;
-using System;
+﻿using System;
 using System.Threading;
+using FxSsh.Logging;
+using FxSsh.Messages.Connection;
 
 namespace FxSsh.Services
 {
@@ -111,7 +111,7 @@ namespace FxSsh.Services
 
             // Server-initiated channels buffer outbound bytes until the peer's
             // OPEN_CONFIRMATION resolves ClientChannelId and the peer window.
-            // Slice the caller's memory instead of Clone() — ReadOnlyMemory<byte>
+            // Slice the caller's memory instead of Clone() - ReadOnlyMemory<byte>
             // is a by-value view over the caller's buffer, safe to retain only
             // if the caller guarantees the buffer outlives the flush. Downstream
             // services hand us bytes they themselves own for the channel's
@@ -162,7 +162,7 @@ namespace FxSsh.Services
 
                 // Zero-copy slice: ChannelDataMessage.Data is now a
                 // ReadOnlyMemory<byte>, so framing the per-packet chunk is just
-                // a view over the caller's buffer — no new byte[packetSize]
+                // a view over the caller's buffer - no new byte[packetSize]
                 // and no Array.Copy per chunk (was the E hot-path allocation).
                 msg.Data = data.Slice((int)offset, (int)packetSize);
                 _connectionService._session.SendMessage(msg);
@@ -275,7 +275,7 @@ namespace FxSsh.Services
         {
             ServerWindowSize -= messageLength;
 
-            // RFC 4254 §5.3: the local window advertised to the peer is topped
+            // RFC 4254 section 5.3: the local window advertised to the peer is topped
             // up by sending SSH_MSG_CHANNEL_WINDOW_ADJUST before the peer's send
             // window would otherwise stall. The exact refresh point is an
             // implementation choice; the only hard constraint is that the peer
@@ -291,7 +291,7 @@ namespace FxSsh.Services
             // thread is synchronously interrupted to encrypt + transmit a
             // WINDOW_ADJUST message. Because 1/2 initial (512 KiB) is still far
             // above ServerMaxPacketSize (32 KiB), the peer can always send a
-            // full-size packet between refreshes — the RFC 4254 hard constraint
+            // full-size packet between refreshes - the RFC 4254 hard constraint
             // stays satisfied. BytesToAdd tops the window back up to the initial
             // size, matching the RFC's "top up" semantics.
             if (ServerWindowSize < ServerInitialWindowSize / 2)

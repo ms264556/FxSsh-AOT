@@ -1,7 +1,7 @@
 ﻿namespace FxSsh.Logging
 {
     /// <summary>
-    /// Configuration for <see cref="Log"/>. Process-wide, idempotent — call
+    /// Configuration for <see cref="Log"/>. Process-wide, idempotent - call
     /// <see cref="Log.Configure"/> once at startup. Defaults to a silent
     /// <see cref="NullLogSink"/> at <see cref="LogLevel.Info"/> so the library
     /// is zero-overhead and no-op until the host opts in.

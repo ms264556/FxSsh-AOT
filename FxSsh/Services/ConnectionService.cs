@@ -1,7 +1,4 @@
-using FxSsh.Logging;
-using FxSsh.Messages;
-using FxSsh.Messages.Connection;
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
@@ -10,6 +7,9 @@ using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using FxSsh.Logging;
+using FxSsh.Messages;
+using FxSsh.Messages.Connection;
 
 namespace FxSsh.Services
 {

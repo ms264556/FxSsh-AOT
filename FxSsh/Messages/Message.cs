@@ -38,7 +38,7 @@ namespace FxSsh.Messages
         /// frame it with packet_length/padding_length itself, so we avoid
         /// the round-trip through an intermediate <c>byte[]</c> payload.
         ///
-        /// The writer is not disposed here — the caller disposes it once it
+        /// The writer is not disposed here - the caller disposes it once it
         /// has finished framing.
         /// </summary>
         public void WritePayload(SshDataWriter writer)

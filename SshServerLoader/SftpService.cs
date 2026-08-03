@@ -1,11 +1,11 @@
-﻿using FxSsh;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using FxSsh;
 
 namespace SshServerLoader
 {
@@ -83,7 +83,7 @@ namespace SshServerLoader
             // The incoming slice is over the SSH receive buffer, which is
             // recycled by the next ReceiveMessage. SFTP frames may span
             // multiple SSH packets (we accumulate into _pandingBytes), so
-            // we MUST materialise an independent copy here — keeping the
+            // we MUST materialise an independent copy here - keeping the
             // slice would alias garbage once the message loop re-reads.
             // This is the one mandatory copy on the SFTP inbound path.
             var bytes = data.ToArray();

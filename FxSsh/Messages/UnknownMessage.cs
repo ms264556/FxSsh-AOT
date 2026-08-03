@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace FxSsh.Messages
 {
@@ -8,7 +8,7 @@ namespace FxSsh.Messages
 
         public byte UnknownMessageType { get; set; }
 
-        public override byte MessageType { get { throw new NotSupportedException();} }
+        public override byte MessageType { get { throw new NotSupportedException(); } }
 
         public UnimplementedMessage MakeUnimplementedMessage()
         {

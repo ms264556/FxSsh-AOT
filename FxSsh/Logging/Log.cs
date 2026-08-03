@@ -1,4 +1,4 @@
-#nullable enable
+﻿#nullable enable
 using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -6,7 +6,7 @@ using System.Threading;
 namespace FxSsh.Logging
 {
     /// <summary>
-    /// Static log facade — the single entry point for all library logging.
+    /// Static log facade - the single entry point for all library logging.
     ///
     /// Zero-dependency and silent by default: until <see cref="Configure"/> is
     /// called, all methods are no-ops backed by <see cref="NullLogSink"/>.

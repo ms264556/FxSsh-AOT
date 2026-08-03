@@ -1,10 +1,10 @@
-using FxSsh.Logging;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using FxSsh.Logging;
 
 namespace FxSsh
 {
@@ -129,7 +129,7 @@ namespace FxSsh
                     {
                         Log.Info($"Session accepted from {remote}.");
                         ConnectionAccepted?.Invoke(this, session);
-                        Log.Debug($"Session {remote} establishing protocol…");
+                        Log.Debug($"Session {remote} establishing protocol...");
                         session.EstablishConnection();
                     }
                     catch (SshConnectionException ex)
@@ -137,7 +137,7 @@ namespace FxSsh
                         if (ex.DisconnectReason == DisconnectReason.ConnectionLost)
                         {
                             // Peer closed/reset the TCP connection (e.g. normal
-                            // exit after our channel teardown) — not an error.
+                            // exit after our channel teardown) - not an error.
                             Log.Debug($"Session {remote} connection closed: {ex.Message}");
                         }
                         else

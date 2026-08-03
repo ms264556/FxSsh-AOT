@@ -17,7 +17,7 @@ namespace FxSsh.Messages
         private const byte MessageNumber = 7;
 
         /// <summary>
-        /// Extension name → value dictionary.
+        /// Extension name -> value dictionary.
         /// RFC 8308 requires that extensions be sent in ascending order by name.
         /// </summary>
         public Dictionary<string, string> Extensions { get; set; } = [];

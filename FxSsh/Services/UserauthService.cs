@@ -1,7 +1,7 @@
-﻿using FxSsh.Logging;
+﻿using System;
+using FxSsh.Logging;
 using FxSsh.Messages;
 using FxSsh.Messages.UserAuth;
-using System;
 
 namespace FxSsh.Services
 {

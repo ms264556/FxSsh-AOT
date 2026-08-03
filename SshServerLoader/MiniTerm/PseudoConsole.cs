@@ -1,5 +1,5 @@
-﻿using Microsoft.Win32.SafeHandles;
-using System;
+﻿using System;
+using Microsoft.Win32.SafeHandles;
 using static MiniTerm.Native.PseudoConsoleApi;
 
 namespace MiniTerm
@@ -24,7 +24,7 @@ namespace MiniTerm
                 new COORD { X = (short)width, Y = (short)height },
                 inputReadSide, outputWriteSide,
                 0, out IntPtr hPC);
-            if(createResult != 0)
+            if (createResult != 0)
             {
                 throw new InvalidOperationException("Could not create psuedo console. Error Code " + createResult);
             }

@@ -26,7 +26,7 @@ namespace FxSsh.Algorithms
             if (mode == CipherModeEx.GCM)
             {
                 // RFC 5647 section 7.1 + OpenSSL SET_IV_FIXED(arg=-1): the full 12-byte
-                // IV is materialised by key exchange — first 4 bytes fixed field,
+                // IV is materialised by key exchange - first 4 bytes fixed field,
                 // last 8 bytes seed the invocation counter (NOT zero). AesGcm owns
                 // the key; _algorithm is left null and the SymmetricAlgorithm
                 // parameter is unused (CipherInfo's GCM ctor passes null), so we
@@ -98,7 +98,7 @@ namespace FxSsh.Algorithms
         /// <paramref name="inputLength"/> bytes (not valid for GCM).
         ///
         /// <paramref name="inputLength"/> may be smaller than
-        /// <paramref name="input"/>.Length — callers that hold a pooled buffer
+        /// <paramref name="input"/>.Length - callers that hold a pooled buffer
         /// larger than the actual packet MUST pass the exact byte count:
         /// ICryptoTransform.TransformBlock processes the entire supplied
         /// count, and the CTR implementation advances its keystream counter

@@ -65,7 +65,7 @@ namespace FxSsh.Algorithms
             // Hot path: the whole packet fits the keystream buffer. Build all
             // consecutive counter blocks, encrypt them in one AES call, then
             // XOR in 8-byte (ulong) chunks. Mathematically identical to the
-            // per-block loop — same keystream, same counter carry — so the
+            // per-block loop - same keystream, same counter carry - so the
             // byte stream is unchanged.
             if (ksLen <= _ks.Length)
             {
