@@ -1,11 +1,11 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using FxSsh.Logging;
 using FxSsh.Messages;
@@ -16,9 +16,15 @@ namespace FxSsh.Services
     public class ConnectionService : SshService
     {
         private readonly object _locker = new();
-        private readonly List<Channel> _channels = [];
+        // Keyed by ServerChannelId for O(1) lookup on the data/control hot
+        // path (every ChannelDataMessage/WindowAdjust does a find). The old
+        // List + FirstOrDefault scan was O(channels) per packet and churned
+        // enumerator allocations; with forwarding at n=500 this was a real
+        // scalability cost.
+        private readonly Dictionary<uint, Channel> _channels = [];
         private readonly UserAuthArgs _auth = null;
-        private readonly BlockingCollection<ConnectionServiceMessage> _messageQueue = [];
+        private readonly System.Threading.Channels.Channel<ConnectionServiceMessage> _messageChannel =
+            System.Threading.Channels.Channel.CreateUnbounded<ConnectionServiceMessage>(new UnboundedChannelOptions { SingleReader = true });
         private readonly CancellationTokenSource _messageCts = new();
 
         private int _serverChannelCounter = -1;
@@ -36,7 +42,7 @@ namespace FxSsh.Services
 
             _auth = auth;
 
-            Task.Run(MessageLoop);
+            Task.Run(MessageLoopAsync);
         }
 
         public event EventHandler<CommandRequestedArgs> CommandOpened;
@@ -54,10 +60,11 @@ namespace FxSsh.Services
         protected internal override void CloseService()
         {
             _messageCts.Cancel();
+            _messageChannel.Writer.TryComplete();
 
             lock (_locker)
             {
-                foreach (var channel in _channels.ToArray())
+                foreach (var channel in _channels.Values.ToArray())
                 {
                     channel.ForceClose();
                 }
@@ -77,18 +84,19 @@ namespace FxSsh.Services
             ArgumentNullException.ThrowIfNull(message);
 
             if (message is ChannelWindowAdjustMessage)
+                // Window adjust must be processed inline (before the queued
+                // messages ahead of it) so send-window accounting stays exact.
                 this.HandleMessage((dynamic)message);
             else
-                _messageQueue.Add(message);
+                _messageChannel.Writer.TryWrite(message);
         }
 
-        private void MessageLoop()
+        private async Task MessageLoopAsync()
         {
             try
             {
-                while (true)
+                await foreach (var message in _messageChannel.Reader.ReadAllAsync(_messageCts.Token))
                 {
-                    var message = _messageQueue.Take(_messageCts.Token);
                     this.HandleMessage((dynamic)message);
                 }
             }
@@ -294,7 +302,7 @@ namespace FxSsh.Services
 
             var channel = new PendingForwardedChannel(this, serverChannelId);
             lock (_locker)
-                _channels.Add(channel);
+                _channels[serverChannelId] = channel;
 
             var open = new ForwardedTcpIpOpenMessage(
                 serverChannelId,
@@ -317,7 +325,7 @@ namespace FxSsh.Services
             // echoes it back. message.SenderChannel is the peer's new channel id.
             Channel channel;
             lock (_locker)
-                channel = _channels.FirstOrDefault(c => c.ServerChannelId == message.RecipientChannel);
+                _channels.TryGetValue(message.RecipientChannel, out channel);
 
             if (channel is PendingForwardedChannel pending)
             {
@@ -339,12 +347,12 @@ namespace FxSsh.Services
         {
             Channel channel;
             lock (_locker)
-                channel = _channels.FirstOrDefault(c => c.ServerChannelId == message.RecipientChannel);
+                _channels.TryGetValue(message.RecipientChannel, out channel);
 
             if (channel is PendingForwardedChannel pending)
             {
                 lock (_locker)
-                    _channels.Remove(pending);
+                    _channels.Remove(pending.ServerChannelId);
                 // Pending channel never registered with a bridge, so just drop.
             }
         }
@@ -518,7 +526,7 @@ namespace FxSsh.Services
             Log.Info($"Channel opened: type={message.ChannelType} client-id={message.SenderChannel} server-id={channel.ServerChannelId}.");
 
             lock (_locker)
-                _channels.Add(channel);
+                _channels[channel.ServerChannelId] = channel;
 
             var msg = new ChannelOpenConfirmationMessage
             {
@@ -584,24 +592,11 @@ namespace FxSsh.Services
             channel.OnWindowChange(new WindowChangeArgs(channel, message.WidthColumns, message.HeightRows, message.WidthPixels, message.HeightPixels));
         }
 
-        private T FindChannelByClientId<T>(uint id) where T : Channel
-        {
-            lock (_locker)
-            {
-                var channel = _channels.FirstOrDefault(x => x.ClientChannelId == id) as T;
-                if (channel == null)
-                    throw new SshConnectionException(string.Format("Invalid client channel id {0}.", id),
-                        DisconnectReason.ProtocolError);
-
-                return channel;
-            }
-        }
-
         private T FindChannelByServerId<T>(uint id) where T : Channel
         {
             lock (_locker)
             {
-                var channel = _channels.FirstOrDefault(x => x.ServerChannelId == id) as T;
+                var channel = _channels.TryGetValue(id, out var c) ? c as T : null;
                 if (channel == null)
                     throw new SshConnectionException(string.Format("Invalid server channel id {0}.", id),
                         DisconnectReason.ProtocolError);
@@ -614,7 +609,7 @@ namespace FxSsh.Services
         {
             lock (_locker)
             {
-                _channels.Remove(channel);
+                _channels.Remove(channel.ServerChannelId);
             }
         }
     }
