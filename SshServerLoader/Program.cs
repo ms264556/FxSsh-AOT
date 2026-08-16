@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using FxSsh;
 using FxSsh.Logging;
 using FxSsh.Services;
+using FxSsh.Services.Sftp;
 using MiniTerm;
 
 namespace SshServerLoader
@@ -114,6 +115,7 @@ TA==
             {
                 var service = (ConnectionService)e;
                 service.CommandOpened += service_CommandOpened;
+                service.SubsystemRequested += service_SubsystemRequested;
                 service.EnvReceived += service_EnvReceived;
                 service.PtyReceived += service_PtyReceived;
                 service.TcpForwardRequest += service_TcpForwardRequest;
@@ -207,6 +209,20 @@ TA==
             e.Result = true;
         }
 
+        static void service_SubsystemRequested(object sender, SubsystemRequestedArgs e)
+        {
+            Log.Info($"Subsystem requested: {e.Name}.");
+
+            if (e.Name != "sftp")
+                return;
+
+            e.Agreed = true;
+            // Default SFTP root is the current user's home directory.
+            // To serve read-only, use: new SftpService(readOnly: true);
+            var sftp = new SftpService();
+            sftp.Attach(e.Channel);
+        }
+
         static void service_CommandOpened(object sender, CommandRequestedArgs e)
         {
             Log.Info($"Channel {e.Channel.ServerChannelId} runs {e.ShellType}: \"{e.CommandText}\", client key SHA256:{e.AttachedUserAuthArgs.Fingerprint}.");
@@ -248,14 +264,9 @@ TA==
             }
             else if (e.ShellType == "subsystem")
             {
-                if (e.CommandText == "sftp")
-                {
-                    var sftp = new SftpService(OperatingSystem.IsWindows() ? @"C:\" : @"/");
-                    e.Channel.DataReceived += (ss, ee) => sftp.OnData(ee);
-                    e.Channel.CloseReceived += (ss, ee) => sftp.OnClose();
-                    sftp.DataReceived += async (ss, ee) => await TrySendChannelDataAsync(e.Channel, ee);
-                    sftp.CloseReceived += (ss, ee) => e.Channel.SendClose(ee);
-                }
+                // SFTP is handled through the dedicated SubsystemRequested
+                // event (see service_SubsystemRequested); other subsystems
+                // are rejected by leaving Agreed unset.
             }
         }
     }
