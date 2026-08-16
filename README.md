@@ -204,7 +204,7 @@ static async Task TrySendChannelDataAsync(Channel channel, byte[] data)
 /// Fire-and-forget PTY input write that swallows teardown exceptions
 /// (same rationale as <see cref="TrySendChannelDataAsync"/>).
 /// </summary>
-static async Task TryTerminalInputAsync(Terminal terminal, ReadOnlyMemory<byte> data)
+static async Task TryTerminalInputAsync(ITerminal terminal, ReadOnlyMemory<byte> data)
 {
     try
     {
@@ -280,9 +280,10 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
 
     if (e.ShellType == "shell")
     {
-        // requirements: Windows 10 RedStone 5, 1809
-        // also, you can call powershell.exe
-        var terminal = new Terminal("cmd.exe", windowWidth, windowHeight);
+        // Windows: Win32 Pseudo Console (ConPTY, Windows 10 1809+).
+        // Linux: devpts/ptmx (see FxSsh.Services.Pty).
+        var shell = OperatingSystem.IsWindows() ? "cmd.exe" : "bash";
+        var terminal = TerminalFactory.Create(shell, windowWidth, windowHeight);
 
         e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
         e.Channel.DataReceived += async (ss, ee) => await TryTerminalInputAsync(terminal, ee);
@@ -332,3 +333,4 @@ library were originally derived from FxSsh.
 
 ### License
 The MIT license
+

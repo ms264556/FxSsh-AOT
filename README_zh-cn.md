@@ -209,7 +209,7 @@ static async Task TrySendChannelDataAsync(Channel channel, byte[] data)
 /// 发起即忘记的 PTY 输入写入，吞掉销毁期间的异常
 /// （与 <see cref="TrySendChannelDataAsync"/> 的理由相同）。
 /// </summary>
-static async Task TryTerminalInputAsync(Terminal terminal, ReadOnlyMemory<byte> data)
+static async Task TryTerminalInputAsync(ITerminal terminal, ReadOnlyMemory<byte> data)
 {
     try
     {
@@ -285,9 +285,10 @@ static void service_CommandOpened(object sender, CommandRequestedArgs e)
 
     if (e.ShellType == "shell")
     {
-        // 要求：Windows 10 RedStone 5, 1809
-        // 也可以调用 powershell.exe
-        var terminal = new Terminal("cmd.exe", windowWidth, windowHeight);
+        // Windows：Win32 伪控制台（ConPTY，Windows 10 1809+）。
+        // Linux：devpts/ptmx（见 FxSsh.Services.Pty）。
+        var shell = OperatingSystem.IsWindows() ? "cmd.exe" : "bash";
+        var terminal = TerminalFactory.Create(shell, windowWidth, windowHeight);
 
         e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
         e.Channel.DataReceived += async (ss, ee) => await TryTerminalInputAsync(terminal, ee);
@@ -339,3 +340,4 @@ KeyGenerator.ConvertRsaBase64KeyToPem("base64");   // 将旧的 RSA Base64 密�
 ### 许可证
 
 MIT 许可证
+

@@ -4,14 +4,15 @@ using System.Threading.Tasks;
 using FxSsh;
 using FxSsh.Logging;
 using FxSsh.Services;
+using FxSsh.Services.Pty;
 using FxSsh.Services.Sftp;
-using MiniTerm;
 
 namespace SshServerLoader
 {
     class Program
     {
         static int windowWidth, windowHeight;
+        static byte[] ptyModes;
 
         static void Main(string[] args)
         {
@@ -158,7 +159,7 @@ TA==
         /// Fire-and-forget PTY input write that swallows teardown exceptions
         /// (same rationale as <see cref="TrySendChannelDataAsync"/>).
         /// </summary>
-        static async Task TryTerminalInputAsync(Terminal terminal, ReadOnlyMemory<byte> data)
+        static async Task TryTerminalInputAsync(ITerminal terminal, ReadOnlyMemory<byte> data)
         {
             try
             {
@@ -195,6 +196,7 @@ TA==
             Log.Info($"Request to create a PTY received for terminal type {e.Terminal}.");
             windowWidth = (int)e.WidthChars;
             windowHeight = (int)e.HeightRows;
+            ptyModes = e.Modes;
         }
 
         static void service_EnvReceived(object sender, EnvironmentArgs e)
@@ -234,9 +236,10 @@ TA==
 
             if (e.ShellType == "shell")
             {
-                // requirements: Windows 10 RedStone 5, 1809
-                // also, you can call powershell.exe
-                var terminal = new Terminal("cmd.exe", windowWidth, windowHeight);
+                // Windows: Win32 Pseudo Console (ConPTY, Windows 10 1809+).
+                // Linux: devpts/ptmx via fork + exec (see FxSsh.Services.Pty).
+                var shell = OperatingSystem.IsWindows() ? "cmd.exe" : "bash";
+                var terminal = TerminalFactory.Create(shell, windowWidth, windowHeight, ptyModes);
 
                 e.Channel.WindowChange += (ss, ee) => terminal.Resize((int)ee.WidthColumns, (int)ee.HeightRows);
                 e.Channel.DataReceived += async (ss, ee) => await TryTerminalInputAsync(terminal, ee);
@@ -271,3 +274,4 @@ TA==
         }
     }
 }
+
