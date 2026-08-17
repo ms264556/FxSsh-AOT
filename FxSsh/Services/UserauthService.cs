@@ -109,11 +109,11 @@ namespace FxSsh.Services
 
         private void HandleMessage(PublicKeyRequestMessage message)
         {
-            if (Session._publicKeyAlgorithms.ContainsKey(message.KeyAlgorithmName))
+            if (_session._publicKeyAlgorithms.ContainsKey(message.KeyAlgorithmName))
             {
                 var verifed = false;
 
-                var keyAlg = Session._publicKeyAlgorithms[message.KeyAlgorithmName](null);
+                var keyAlg = _session._publicKeyAlgorithms[message.KeyAlgorithmName](null);
                 keyAlg.LoadKeyAndCertificatesData(message.PublicKey);
 
                 var args = new UserAuthArgs(base._session, message.Username, message.KeyAlgorithmName, keyAlg.GetFingerprint(), message.PublicKey);

@@ -6,6 +6,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
+using FxSsh.Algorithms;
 using FxSsh.Logging;
 
 namespace FxSsh
@@ -32,6 +33,14 @@ namespace FxSsh
         }
 
         public StartingInfo StartingInfo { get; private set; }
+
+        /// <summary>
+        /// Per-server algorithm selection. Null selectors (the default) load
+        /// every algorithm supported on this platform; see AlgorithmRegistry.
+        /// EncryptionAlgorithms and friends for the available choices, and
+        /// assign a subset to restrict a category.
+        /// </summary>
+        public AlgorithmSelection Algorithms { get; } = new();
 
         public event EventHandler<Session> ConnectionAccepted;
         public event EventHandler<Exception> ExceptionRaised;
@@ -131,7 +140,7 @@ namespace FxSsh
             }
 
             var remote = socket.RemoteEndPoint?.ToString() ?? "?";
-            var session = new Session(socket, _hostKey, StartingInfo.ServerBanner);
+            var session = new Session(socket, _hostKey, StartingInfo.ServerBanner, Algorithms);
 
             session.Disconnected += (ss, ee) => _sessions.TryRemove(session.Id, out _);
 

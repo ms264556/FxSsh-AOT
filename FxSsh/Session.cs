@@ -38,11 +38,14 @@ namespace FxSsh
         internal const int MinimumPacketLength = 12;
 
         private static readonly Dictionary<byte, Type> _messagesMetadata;
-        internal static readonly Dictionary<string, Func<KexAlgorithm>> _keyExchangeAlgorithms = [];
-        internal static readonly Dictionary<string, Func<string, PublicKeyAlgorithm>> _publicKeyAlgorithms = [];
-        internal static readonly Dictionary<string, Func<CipherInfo>> _encryptionAlgorithms = [];
-        internal static readonly Dictionary<string, Func<HmacInfo>> _hmacAlgorithms = [];
-        internal static readonly Dictionary<string, Func<CompressionAlgorithm>> _compressionAlgorithms = [];
+
+        // Active algorithm set for this session; resolved from the server's
+        // AlgorithmSelection in the ctor (see below).
+        private readonly Dictionary<string, Func<KexAlgorithm>> _keyExchangeAlgorithms;
+        internal readonly Dictionary<string, Func<string, PublicKeyAlgorithm>> _publicKeyAlgorithms;
+        private readonly Dictionary<string, Func<CipherInfo>> _encryptionAlgorithms;
+        private readonly Dictionary<string, Func<HmacInfo>> _hmacAlgorithms;
+        private readonly Dictionary<string, Func<CompressionAlgorithm>> _compressionAlgorithms;
 
         private readonly object _locker = new();
         private Socket _socket;
@@ -101,34 +104,9 @@ namespace FxSsh
 
         static Session()
         {
-            // curve25519-sha256 (RFC 8731) is the modern default and is
-            // registered first so clients that list it pick it up.
-            _keyExchangeAlgorithms.Add("curve25519-sha256", () => new X25519Kex());
-
-            _keyExchangeAlgorithms.Add("ecdh-sha2-nistp256", () => new EcdhKex("nistp256"));
-            _keyExchangeAlgorithms.Add("ecdh-sha2-nistp384", () => new EcdhKex("nistp384"));
-            _keyExchangeAlgorithms.Add("ecdh-sha2-nistp521", () => new EcdhKex("nistp521"));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group18-sha512", () => new DiffieHellmanKex(512, 8192));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group16-sha512", () => new DiffieHellmanKex(512, 4096));
-            _keyExchangeAlgorithms.Add("diffie-hellman-group14-sha256", () => new DiffieHellmanKex(256, 2048));
-
-            _publicKeyAlgorithms.Add("ecdsa-sha2-nistp256", x => new EcdsaKey("nistp256", x));
-            _publicKeyAlgorithms.Add("ecdsa-sha2-nistp384", x => new EcdsaKey("nistp384", x));
-            _publicKeyAlgorithms.Add("ecdsa-sha2-nistp521", x => new EcdsaKey("nistp521", x));
-            _publicKeyAlgorithms.Add("rsa-sha2-256", x => new RsaKey(256, x));
-            _publicKeyAlgorithms.Add("rsa-sha2-512", x => new RsaKey(512, x));
-
-            _encryptionAlgorithms.Add("aes256-ctr", () => new CipherInfo(Aes.Create(), 256, CipherModeEx.CTR));
-            _encryptionAlgorithms.Add("aes256-gcm@openssh.com", () => new CipherInfo(256));
-            _encryptionAlgorithms.Add("aes128-gcm@openssh.com", () => new CipherInfo(128));
-
-            _hmacAlgorithms.Add("hmac-sha2-256", () => new HmacInfo(new HMACSHA256(), 256));
-            _hmacAlgorithms.Add("hmac-sha2-512", () => new HmacInfo(new HMACSHA512(), 512));
-            _hmacAlgorithms.Add("hmac-sha2-256-etm@openssh.com", () => new HmacInfo(new HMACSHA256(), 256, true));
-            _hmacAlgorithms.Add("hmac-sha2-512-etm@openssh.com", () => new HmacInfo(new HMACSHA512(), 512, true));
-
-            _compressionAlgorithms.Add("none", () => new NoCompression());
-
+            // The default algorithm suites now live in AlgorithmRegistry (see
+            // AlgorithmRegistry.DefaultAlgorithms); this static constructor
+            // only wires up the message metadata table.
             _messagesMetadata = (from t in typeof(Message).Assembly.GetTypes()
                                  let attrib = (MessageAttribute)t.GetCustomAttributes(typeof(MessageAttribute), false).FirstOrDefault()
                                  where attrib != null
@@ -136,7 +114,7 @@ namespace FxSsh
                                  .ToDictionary(x => x.Number, x => x.Type);
         }
 
-        public Session(Socket socket, Dictionary<string, string> hostKey, string serverBanner)
+        public Session(Socket socket, Dictionary<string, string> hostKey, string serverBanner, AlgorithmSelection algorithms = null)
         {
             ArgumentNullException.ThrowIfNull(socket);
             ArgumentNullException.ThrowIfNull(hostKey);
@@ -145,6 +123,14 @@ namespace FxSsh
             _socket = socket;
             _hostKey = hostKey.ToDictionary(s => s.Key, s => s.Value);
             ServerVersion = serverBanner;
+
+            // Null selectors resolve to every algorithm supported on this
+            // platform; subsets are picked by name from AlgorithmRegistry.
+            _keyExchangeAlgorithms = AlgorithmRegistry.ResolveKeyExchange(algorithms?.KeyExchangeAlgorithms);
+            _publicKeyAlgorithms = AlgorithmRegistry.ResolveHostKey(algorithms?.HostKeyAlgorithms);
+            _encryptionAlgorithms = AlgorithmRegistry.ResolveEncryption(algorithms?.EncryptionAlgorithms);
+            _hmacAlgorithms = AlgorithmRegistry.ResolveMac(algorithms?.MacAlgorithms);
+            _compressionAlgorithms = AlgorithmRegistry.ResolveCompression(algorithms?.CompressionAlgorithms);
         }
 
         public event EventHandler<EventArgs> Disconnected;
