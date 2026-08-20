@@ -24,6 +24,7 @@ namespace FxSsh.Algorithms
 
         private static readonly (string Name, Func<KexAlgorithm> Factory, bool Supported)[] KeyExchangeCatalog =
         [
+            ("mlkem768x25519-sha256", () => new MlkemX25519Kex(), TryCreate(() => MLKem.GenerateKey(MLKemAlgorithm.MLKem768))),
             ("curve25519-sha256", () => new X25519Kex(), TryCreate(() => X25519DiffieHellman.GenerateKey())),
             ("ecdh-sha2-nistp256", () => new EcdhKex("nistp256"), TryCreate(() => ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256))),
             ("ecdh-sha2-nistp384", () => new EcdhKex("nistp384"), TryCreate(() => ECDiffieHellman.Create(ECCurve.NamedCurves.nistP384))),

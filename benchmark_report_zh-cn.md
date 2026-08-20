@@ -1,4 +1,4 @@
-# .NET SSH 库对比测试报告：aimeast/FxSsh vs Microsoft Dev Tunnels SSH
+﻿# .NET SSH 库对比测试报告：aimeast/FxSsh vs Microsoft Dev Tunnels SSH
 
 > 测试目标：使用 **OpenSSH 客户端**对两个 .NET SSH 服务端库 **FxSsh (commit 3f7eb6)** 与 **Dev Tunnels SSH (`Microsoft.DevTunnels.Ssh` 3.12.40)** 的**能力、传输速度、内存占用**进行全面测试，覆盖各自**每一种可用的密码算法**。
 
@@ -9,7 +9,7 @@
 | 维度 | 结论 |
 | --- | --- |
 | 密码算法广度 | 两库都**只支持 3 种密码**，且都**不支持** `chacha20-poly1305`、`3des-cbc`、`aes*-cbc`（除 DevTunnels 的 `aes256-cbc`）、`arcfour` 等。FxSsh 独有 `aes128-gcm`；DevTunnels 独有 `aes256-cbc`。 |
-| 密钥交换 | FxSsh 更广（7 种，含 `curve25519-sha256`、`group18-sha512` 与 `ecdsa-nistp521`）；DevTunnels 仅 4 种，缺 `curve25519`、`group18` 与 `nistp521`。 |
+| 密钥交换 | FxSsh 更广（8 种，含后量子混合算法 `mlkem768x25519-sha256`、`curve25519-sha256`、`group18-sha512` 与 `ecdsa-nistp521`）；DevTunnels 仅 4 种，上述均缺失。 |
 | 主机密钥 | FxSsh 支持 5 种（含 `ecdsa-nistp521`）；DevTunnels 仅 4 种，缺 `nistp521`，且两者都不支持 `ssh-ed25519` / `ssh-rsa`(SHA1)。 |
 | 速度 | **FxSsh 整体更快**。同档 CTR：FxSsh 161 MB/s vs DevTunnels 56 MB/s（≈2.9×）；同档 GCM：FxSsh 311 MB/s vs DevTunnels 243 MB/s（≈1.3×）。**DevTunnels 的 CTR 模式是明显短板（~57 MB/s）。** |
 | 内存 | **FxSsh 更精简**：基线 67 MB、峰值 ~93 MB；DevTunnels 基线 83 MB、峰值 ~99 MB（多约 15 MB 基线、5–8 MB 峰值）。 |
@@ -79,10 +79,11 @@
 | `diffie-hellman-group16-sha512` | ✅ | ✅ |
 | `diffie-hellman-group18-sha512` | ✅ | ❌ |
 | `curve25519-sha256` | ✅ | ❌ |
+| `mlkem768x25519-sha256` | ✅ | ❌ |
 | `diffie-hellman-group*-sha1` / `-exchange-*` | ❌ | ❌ |
 | `sntrup761x25519-sha512@openssh.com` | ❌ | ❌ |
 
-> **FxSsh 的 KEX 覆盖面更广**（7 种 vs 4 种），尤其包含更现代的 `curve25519-sha256`、`group18-sha512` 与 `ecdsa-nistp521`。
+> **FxSsh 的 KEX 覆盖面更广**（8 种 vs 4 种），尤其包含更现代的 `curve25519-sha256`、后量子混合算法 `mlkem768x25519-sha256`（X25519 + ML-KEM-768，FIPS 203）、`group18-sha512` 与 `ecdsa-nistp521`。
 
 ### 4.3 MAC（固定 `aes256-ctr`；AEAD 密码下 MAC 不生效）
 

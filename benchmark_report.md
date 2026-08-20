@@ -1,4 +1,4 @@
-# .NET SSH Library Comparison Test Report: aimeast/FxSsh vs Microsoft Dev Tunnels SSH
+﻿# .NET SSH Library Comparison Test Report: aimeast/FxSsh vs Microsoft Dev Tunnels SSH
 
 > Test objective: Use the **OpenSSH client** to comprehensively test the **capabilities, throughput, and memory usage** of two .NET SSH server libraries — **FxSsh (commit 3f7eb6)** and **Dev Tunnels SSH (`Microsoft.DevTunnels.Ssh` 3.12.40)** — covering **every available cipher algorithm** of each library.
 
@@ -9,7 +9,7 @@
 | Dimension | Conclusion |
 | --- | --- |
 | Cipher breadth | Both libraries support only **3 ciphers** and **neither** supports `chacha20-poly1305`, `3des-cbc`, `aes*-cbc` (except DevTunnels' `aes256-cbc`), or `arcfour`. FxSsh uniquely has `aes128-gcm`; DevTunnels uniquely has `aes256-cbc`. |
-| Key exchange | FxSsh is broader (7 vs 4; includes `curve25519-sha256`, `group18-sha512` and `ecdsa-nistp521`); DevTunnels lacks `curve25519`, `group18` and `nistp521`. |
+| Key exchange | FxSsh is broader (8 vs 4; includes the post-quantum hybrid `mlkem768x25519-sha256`, `curve25519-sha256`, `group18-sha512` and `ecdsa-nistp521`); DevTunnels lacks all of these. |
 | Host keys | FxSsh supports 5 (incl. `ecdsa-nistp521`); DevTunnels only 4, missing `nistp521`; neither supports `ssh-ed25519` nor `ssh-rsa`(SHA1). |
 | Speed | **FxSsh is generally faster**. Same-family CTR: FxSsh 161 MB/s vs DevTunnels 56 MB/s (~2.9×); same-family GCM: FxSsh 311 MB/s vs DevTunnels 243 MB/s (~1.3×). **DevTunnels' CTR mode is a clear weak spot (~57 MB/s).** |
 | Memory | **FxSsh is leaner**: baseline 67 MB, peak ~93 MB; DevTunnels baseline 83 MB, peak ~99 MB (~15 MB higher baseline, 5–8 MB higher peak). |
@@ -79,10 +79,11 @@
 | `diffie-hellman-group16-sha512` | ✅ | ✅ |
 | `diffie-hellman-group18-sha512` | ✅ | ❌ |
 | `curve25519-sha256` | ✅ | ❌ |
+| `mlkem768x25519-sha256` | ✅ | ❌ |
 | `diffie-hellman-group*-sha1` / `-exchange-*` | ❌ | ❌ |
 | `sntrup761x25519-sha512@openssh.com` | ❌ | ❌ |
 
-> **FxSsh has broader KEX coverage** (7 vs 4), notably including the more modern `curve25519-sha256`, `group18-sha512` and `ecdsa-nistp521`.
+> **FxSsh has broader KEX coverage** (8 vs 4), notably including the more modern `curve25519-sha256`, the post-quantum hybrid `mlkem768x25519-sha256` (X25519 + ML-KEM-768, FIPS 203), `group18-sha512` and `ecdsa-nistp521`.
 
 ### 4.3 MAC (with `aes256-ctr` pinned; MAC is inert for AEAD ciphers)
 

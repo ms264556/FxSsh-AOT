@@ -23,6 +23,7 @@ FxSsh adheres to the following RFC documents
 - [RFC8308](https://tools.ietf.org/html/rfc8308)  Extension Negotiation in the Secure Shell (SSH) Protocol
 - [RFC8332](https://tools.ietf.org/html/rfc8332)  Use of RSA Keys with SHA-2
 - [RFC8731](https://tools.ietf.org/html/rfc8731)  Secure Shell (SSH) Key Exchange Method Using Curve25519 and Curve448
+- [draft-ietf-sshm-mlkem-hybrid-kex](https://datatracker.ietf.org/doc/draft-ietf-sshm-mlkem-hybrid-kex/)  Hybrid Key Exchange in SSH using ML-KEM
 - [draft-ietf-secsh-filexfer-02](https://tools.ietf.org/html/draft-ietf-secsh-filexfer-02)  SSH File Transfer Protocol (sftp version 3)
 
 ### Supported Algorithms
@@ -30,7 +31,7 @@ FxSsh adheres to the following RFC documents
 | **Category**          | **Algorithms**                                                                |
 |-----------------------|-------------------------------------------------------------------------------|
 | **Public Key**        | RSA family: `rsa-sha2-256`, `rsa-sha2-512`<br>ECDsa family: `ecdsa-sha2-nistp256`, `ecdsa-sha2-nistp384`, `ecdsa-sha2-nistp521` |
-| **Key Exchange (KEX)**| DH family: `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group18-sha512`<br>ECDH family: `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521`<br>X25519: `curve25519-sha256` |
+| **Key Exchange (KEX)**| DH family: `diffie-hellman-group14-sha256`, `diffie-hellman-group16-sha512`, `diffie-hellman-group18-sha512`<br>ECDH family: `ecdh-sha2-nistp256`, `ecdh-sha2-nistp384`, `ecdh-sha2-nistp521`<br>X25519: `curve25519-sha256`<br>Hybrid PQ/T: `mlkem768x25519-sha256` (X25519 + ML-KEM-768, FIPS 203) |
 | **Encryption**        | `aes256-ctr`, `aes128-gcm@openssh.com`, `aes256-gcm@openssh.com` |
 | **MAC**               | `hmac-sha2-256`, `hmac-sha2-512`, `hmac-sha2-256-etm@openssh.com`, `hmac-sha2-512-etm@openssh.com` |
 | **Compression**       | `none`                                                                        |
@@ -47,7 +48,7 @@ FxSsh adheres to the following RFC documents
 
 | **Client**      | **Version**                                     |
 |-----------------|-------------------------------------------------|
-| OpenSSH         | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`     |
+| OpenSSH         | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`<br>`OpenSSH_9.9p1, OpenSSL 3.5.0` (mlkem768x25519-sha256) |
 | PuTTY           | `Release 0.82`                                  |
 | WinSCP          | `6.3.6` (sftp only)                             |
 

@@ -28,6 +28,7 @@ FxSsh 遵循以下 RFC 文档：
 - [RFC8308](https://tools.ietf.org/html/rfc8308)  SSH 协议扩展协商
 - [RFC8332](https://tools.ietf.org/html/rfc8332)  RSA 密钥与 SHA-2 的使用
 - [RFC8731](https://tools.ietf.org/html/rfc8731)  使用 Curve25519 与 Curve448 的 SSH 密钥交换方法
+- [draft-ietf-sshm-mlkem-hybrid-kex](https://datatracker.ietf.org/doc/draft-ietf-sshm-mlkem-hybrid-kex/)  SSH 中使用 ML-KEM 的混合密钥交换
 - [draft-ietf-secsh-filexfer-02](https://tools.ietf.org/html/draft-ietf-secsh-filexfer-02)  SSH 文件传输协议（sftp 版本 3）
 
 ### 支持的算法
@@ -35,7 +36,7 @@ FxSsh 遵循以下 RFC 文档：
 | **类别**            | **算法**                                                                                  |
 |---------------------|-------------------------------------------------------------------------------------------|
 | **公钥**            | RSA 系列：`rsa-sha2-256`、`rsa-sha2-512`<br>ECDsa 系列：`ecdsa-sha2-nistp256`、`ecdsa-sha2-nistp384`、`ecdsa-sha2-nistp521` |
-| **密钥交换（KEX）** | DH 系列：`diffie-hellman-group14-sha256`、`diffie-hellman-group16-sha512`、`diffie-hellman-group18-sha512`<br>ECDH 系列：`ecdh-sha2-nistp256`、`ecdh-sha2-nistp384`、`ecdh-sha2-nistp521`<br>X25519：`curve25519-sha256` |
+| **密钥交换（KEX）** | DH 系列：`diffie-hellman-group14-sha256`、`diffie-hellman-group16-sha512`、`diffie-hellman-group18-sha512`<br>ECDH 系列：`ecdh-sha2-nistp256`、`ecdh-sha2-nistp384`、`ecdh-sha2-nistp521`<br>X25519：`curve25519-sha256`<br>混合 PQ/T：`mlkem768x25519-sha256`（X25519 + ML-KEM-768，FIPS 203） |
 | **加密**            | `aes256-ctr`、`aes128-gcm@openssh.com`、`aes256-gcm@openssh.com`                          |
 | **MAC**             | `hmac-sha2-256`、`hmac-sha2-512`、`hmac-sha2-256-etm@openssh.com`、`hmac-sha2-512-etm@openssh.com` |
 | **压缩**            | `none`                                                                                    |
@@ -52,7 +53,7 @@ FxSsh 遵循以下 RFC 文档：
 
 | **客户端**          | **版本**                                               |
 |---------------------|--------------------------------------------------------|
-| OpenSSH             | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`           |
+| OpenSSH             | `OpenSSH_for_Windows_9.5p1, LibreSSL 3.8.2`<br>`OpenSSH_9.9p1, OpenSSL 3.5.0`（mlkem768x25519-sha256） |
 | PuTTY               | `Release 0.82`                                        |
 | WinSCP              | `6.3.6`（仅 sftp）                                    |
 

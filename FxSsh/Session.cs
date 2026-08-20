@@ -1004,7 +1004,8 @@ namespace FxSsh
             // regardless of the host key type (e.g. RSA), which the old
             // host-key-based dispatch would have misrouted to the DH parser.
             var kex = _exchangeContext.KeyExchange;
-            if (kex.StartsWith("curve25519-", StringComparison.Ordinal) || kex.StartsWith("ecdh-", StringComparison.Ordinal))
+            if (kex.StartsWith("curve25519-", StringComparison.Ordinal) || kex.StartsWith("ecdh-", StringComparison.Ordinal)
+                || kex.StartsWith("mlkem", StringComparison.Ordinal))
                 message = Message.LoadFrom<KeyExchangeECDhInitMessage>(message);
             else if (kex.StartsWith("diffie-hellman-", StringComparison.Ordinal))
                 message = Message.LoadFrom<KeyExchangeDhInitMessage>(message);
@@ -1056,8 +1057,14 @@ namespace FxSsh
             var clientHmac = _hmacAlgorithms[_exchangeContext.ClientHmac]();
 
             var clientExchangeValue = message.Q;
-            var serverExchangeValue = kexAlg.CreateKeyExchange();
+            // Hybrid PQ/T KEX (e.g. mlkem768x25519-sha256) must parse the
+            // client's C_INIT first: the server's S_REPLY embeds the ML-KEM
+            // ciphertext, which can only be produced after the client's
+            // encapsulation key is known. Classical algorithms (X25519, ECDH,
+            // DH) generate their key pair in the ctor, so this order is safe
+            // for them too.
             var sharedSecret = kexAlg.DecryptKeyExchange(clientExchangeValue);
+            var serverExchangeValue = kexAlg.CreateKeyExchange();
             var hostKeyAndCerts = hostKeyAlg.CreateKeyAndCertificatesData();
             var exchangeHash = ComputeExchangeHash(kexAlg, hostKeyAndCerts, clientExchangeValue, serverExchangeValue, sharedSecret, true);
 
@@ -1340,7 +1347,12 @@ namespace FxSsh
                 writer.WriteMpint(clientExchangeValue);
                 writer.WriteMpint(serverExchangeValue);
             }
-            writer.WriteMpint(sharedSecret);
+            // Hybrid PQ/T methods carry K as an SSH string (the hash output);
+            // classical methods use the RFC 4253 mpint encoding.
+            if (kexAlg.SharedSecretIsString)
+                writer.WriteBinary(sharedSecret);
+            else
+                writer.WriteMpint(sharedSecret);
             return kexAlg.ComputeHash(writer.ToByteArray());
         }
 
@@ -1404,9 +1416,14 @@ namespace FxSsh
 
             while (keyBufferIndex < blockSize)
             {
-                var writer = new SshDataWriter()
-                    .WriteMpint(sharedSecret)
-                    .WriteBytes(exchangeHash);
+                var writer = new SshDataWriter();
+                // Hybrid PQ/T methods feed K into the KDF as an SSH string;
+                // classical methods use the RFC 4253 mpint encoding.
+                if (kexAlg.SharedSecretIsString)
+                    writer.WriteBinary(sharedSecret);
+                else
+                    writer.WriteMpint(sharedSecret);
+                writer.WriteBytes(exchangeHash);
 
                 if (currentHash == null)
                 {
