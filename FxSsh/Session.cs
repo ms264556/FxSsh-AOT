@@ -115,7 +115,7 @@ namespace FxSsh
                                  .ToDictionary(x => x.Number, x => x.Type);
         }
 
-        public Session(Socket socket, Dictionary<string, string> hostKey, string serverBanner, AlgorithmSelection algorithms = null)
+        internal Session(Socket socket, Dictionary<string, string> hostKey, string serverBanner, AlgorithmSelection algorithms = null, SupportedAlgorithms supportedAlgorithms = null)
         {
             ArgumentNullException.ThrowIfNull(socket);
             ArgumentNullException.ThrowIfNull(hostKey);
@@ -125,13 +125,28 @@ namespace FxSsh
             _hostKey = hostKey.ToDictionary(s => s.Key, s => s.Value);
             ServerVersion = serverBanner;
 
-            // Null selectors resolve to every algorithm supported on this
-            // platform; subsets are picked by name from AlgorithmRegistry.
-            _keyExchangeAlgorithms = AlgorithmRegistry.ResolveKeyExchange(algorithms?.KeyExchangeAlgorithms);
-            _publicKeyAlgorithms = AlgorithmRegistry.ResolveHostKey(algorithms?.HostKeyAlgorithms);
-            _encryptionAlgorithms = AlgorithmRegistry.ResolveEncryption(algorithms?.EncryptionAlgorithms);
-            _hmacAlgorithms = AlgorithmRegistry.ResolveMac(algorithms?.MacAlgorithms);
-            _compressionAlgorithms = AlgorithmRegistry.ResolveCompression(algorithms?.CompressionAlgorithms);
+            // The server's SupportedAlgorithms table is the authoritative
+            // resolution source: it is seeded with the built-in
+            // AlgorithmRegistry defaults and is publicly mutable, so
+            // Add/Remove/override all take effect. An AlgorithmSelection, when
+            // set, narrows each category to the named subset. Fall back to the
+            // static registry when no SupportedAlgorithms table was supplied.
+            if (supportedAlgorithms == null)
+            {
+                _keyExchangeAlgorithms = AlgorithmRegistry.ResolveKeyExchange(algorithms?.KeyExchangeAlgorithms);
+                _publicKeyAlgorithms = AlgorithmRegistry.ResolveHostKey(algorithms?.HostKeyAlgorithms);
+                _encryptionAlgorithms = AlgorithmRegistry.ResolveEncryption(algorithms?.EncryptionAlgorithms);
+                _hmacAlgorithms = AlgorithmRegistry.ResolveMac(algorithms?.MacAlgorithms);
+                _compressionAlgorithms = AlgorithmRegistry.ResolveCompression(algorithms?.CompressionAlgorithms);
+            }
+            else
+            {
+                _keyExchangeAlgorithms = BuildAlgorithmTable(supportedAlgorithms.KeyExchange, algorithms?.KeyExchangeAlgorithms, "key exchange");
+                _publicKeyAlgorithms = BuildAlgorithmTable(supportedAlgorithms.PublicKey, algorithms?.HostKeyAlgorithms, "host key");
+                _encryptionAlgorithms = BuildAlgorithmTable(supportedAlgorithms.Encryption, algorithms?.EncryptionAlgorithms, "encryption");
+                _hmacAlgorithms = BuildAlgorithmTable(supportedAlgorithms.Hmac, algorithms?.MacAlgorithms, "MAC");
+                _compressionAlgorithms = BuildAlgorithmTable(supportedAlgorithms.Compression, algorithms?.CompressionAlgorithms, "compression");
+            }
 
             // RFC 8332: advertise which signature algorithms we accept for
             // publickey auth. OpenSSH 8.8+ refuses to sign unless the server
@@ -485,7 +500,12 @@ namespace FxSsh
                 using var lenBuf = await ReadFromPipeAsync(4, token);
                 if (lenBuf.Length == 0) return null;
                 var lenSpan = lenBuf.Span;
-                var packetLength = lenSpan[0] << 24 | lenSpan[1] << 16 | lenSpan[2] << 8 | lenSpan[3];
+                // Plugin AEAD (chacha20-poly1305@openssh.com) encrypts the
+                // 4-byte length field, so it must be decrypted before
+                // validation; AES-GCM keeps packet_length as plaintext.
+                var packetLength = _algorithms.ClientEncryption.IsTransformCipher
+                    ? _algorithms.ClientEncryption.DecryptPacketLength(_inboundPacketSequence, lenSpan)
+                    : lenSpan[0] << 24 | lenSpan[1] << 16 | lenSpan[2] << 8 | lenSpan[3];
                 if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
                 {
                     throw new SshConnectionException(
@@ -512,10 +532,17 @@ namespace FxSsh
                     // AAD is exactly the 4-byte plaintext packet_length --
                     // NOT the whole lenBuf rental (ArrayPool hands back at
                     // least 16 bytes; OpenSSH authenticates exactly 4).
-                    _algorithms.ClientEncryption.DecryptAead(
-                        lenBuf.ReadOnlySpan,
-                        ciphertextWithTag.Array.AsSpan(0, packetLength + tagLength),
-                        plaintext);
+                    if (_algorithms.ClientEncryption.IsTransformCipher)
+                        _algorithms.ClientEncryption.DecryptAeadPacket(
+                            _inboundPacketSequence,
+                            lenBuf.ReadOnlySpan,
+                            ciphertextWithTag.Array.AsSpan(0, packetLength + tagLength),
+                            plaintext);
+                    else
+                        _algorithms.ClientEncryption.DecryptAead(
+                            lenBuf.ReadOnlySpan,
+                            ciphertextWithTag.Array.AsSpan(0, packetLength + tagLength),
+                            plaintext);
 
                     var paddingLength = plaintext[0];
                     var dataLength = packetLength - paddingLength - 1;
@@ -817,16 +844,29 @@ namespace FxSsh
                 {
                     if (isAead)
                     {
-                        // RFC 5647 section 3 + 7.3 AEAD layout:
-                        // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
-                        // The 4-byte plaintext packet_length is GCM's AAD
-                        // (authenticated but not encrypted). Encrypt straight into
-                        // the rented sendBuf - no intermediate ciphertext array.
-                        frame.Slice(0, 4).CopyTo(wire);
-                        _algorithms.ServerEncryption.EncryptAead(
-                            frame.Slice(0, 4),
-                            frame.Slice(4),
-                            wire.Slice(4));
+                        if (_algorithms.ServerEncryption.IsTransformCipher)
+                        {
+                            // Plugin AEAD (chacha20-poly1305@openssh.com): the
+                            // whole frame incl. the 4-byte length is encrypted
+                            // by the transform and a tag appended.
+                            _algorithms.ServerEncryption.EncryptAeadPacket(
+                                _outboundPacketSequence,
+                                frame,
+                                wire);
+                        }
+                        else
+                        {
+                            // RFC 5647 section 3 + 7.3 AEAD layout:
+                            // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
+                            // The 4-byte plaintext packet_length is GCM's AAD
+                            // (authenticated but not encrypted). Encrypt straight into
+                            // the rented sendBuf - no intermediate ciphertext array.
+                            frame.Slice(0, 4).CopyTo(wire);
+                            _algorithms.ServerEncryption.EncryptAead(
+                                frame.Slice(0, 4),
+                                frame.Slice(4),
+                                wire.Slice(4));
+                        }
                     }
                     else if (_algorithms.ServerHmacIsEtm)
                     {
@@ -1029,7 +1069,7 @@ namespace FxSsh
             // host-key-based dispatch would have misrouted to the DH parser.
             var kex = _exchangeContext.KeyExchange;
             if (kex.StartsWith("curve25519-", StringComparison.Ordinal) || kex.StartsWith("ecdh-", StringComparison.Ordinal)
-                || kex.StartsWith("mlkem", StringComparison.Ordinal))
+                || kex.StartsWith("mlkem", StringComparison.Ordinal) || kex.StartsWith("sntrup", StringComparison.Ordinal))
                 message = Message.LoadFrom<KeyExchangeECDhInitMessage>(message);
             else if (kex.StartsWith("diffie-hellman-", StringComparison.Ordinal))
                 message = Message.LoadFrom<KeyExchangeDhInitMessage>(message);
@@ -1353,6 +1393,20 @@ namespace FxSsh
                 }
 
             throw new SshConnectionException("Failed to negotiate algorithm.", DisconnectReason.KeyExchangeFailed);
+        }
+
+        // Copy an OrderedDictionary category into the per-session Dictionary,
+        // optionally narrowed to an AlgorithmSelection name subset. Throws when
+        // nothing is left (mirrors AlgorithmRegistry.Resolve*).
+        private static Dictionary<string, T> BuildAlgorithmTable<T>(OrderedDictionary<string, T> source, IReadOnlyList<string> selected, string category)
+        {
+            var result = new Dictionary<string, T>();
+            foreach (var kv in source)
+                if (selected == null || selected.Contains(kv.Key))
+                    result[kv.Key] = kv.Value;
+            if (result.Count == 0)
+                throw new InvalidOperationException($"No supported {category} algorithms configured.");
+            return result;
         }
 
         private byte[] ComputeExchangeHash(KexAlgorithm kexAlg, byte[] hostKeyAndCerts, byte[] clientExchangeValue, byte[] serverExchangeValue, byte[] sharedSecret, bool isEcdh)

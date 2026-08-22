@@ -30,6 +30,7 @@ namespace FxSsh
             ArgumentNullException.ThrowIfNull(info);
 
             StartingInfo = info;
+            HazMat = new HazMat(_supported);
         }
 
         public StartingInfo StartingInfo { get; private set; }
@@ -41,6 +42,19 @@ namespace FxSsh
         /// assign a subset to restrict a category.
         /// </summary>
         public AlgorithmSelection Algorithms { get; } = new();
+
+        private readonly SupportedAlgorithms _supported = new();
+
+        /// <summary>
+        /// Public configuration surface for the server's pluggable algorithm
+        /// registry (ed25519, chacha20-poly1305, umac, legacy algos, ...),
+        /// seeded with the built-in <see cref="Algorithms"/> AlgorithmRegistry
+        /// defaults. Mutations are reflected in the advertised/negotiated set on
+        /// the next connection; use
+        /// <see cref="HazMat.OverrideSafeAlgorithmDefaults"/> for a fluent
+        /// configuration callback.
+        /// </summary>
+        public HazMat HazMat { get; }
 
         public event EventHandler<Session> ConnectionAccepted;
         public event EventHandler<Exception> ExceptionRaised;
@@ -140,7 +154,7 @@ namespace FxSsh
             }
 
             var remote = socket.RemoteEndPoint?.ToString() ?? "?";
-            var session = new Session(socket, _hostKey, StartingInfo.ServerBanner, Algorithms);
+            var session = new Session(socket, _hostKey, StartingInfo.ServerBanner, Algorithms, _supported);
 
             session.Disconnected += (ss, ee) => _sessions.TryRemove(session.Id, out _);
 
