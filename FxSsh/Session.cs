@@ -89,6 +89,7 @@ namespace FxSsh
         private Dictionary<string, string> _extensionsToSend = [];
         private bool _clientAdvertisedExtInfo;  // client KEXINIT had "ext-info-c"
         private ConcurrentQueue<Message> _blockedMessages = new();
+        private bool _discardNextKexPacket;
 
         private static long _nextId = 0;
         public long Id { get; }
@@ -131,6 +132,12 @@ namespace FxSsh
             _encryptionAlgorithms = AlgorithmRegistry.ResolveEncryption(algorithms?.EncryptionAlgorithms);
             _hmacAlgorithms = AlgorithmRegistry.ResolveMac(algorithms?.MacAlgorithms);
             _compressionAlgorithms = AlgorithmRegistry.ResolveCompression(algorithms?.CompressionAlgorithms);
+
+            // RFC 8332: advertise which signature algorithms we accept for
+            // publickey auth. OpenSSH 8.8+ refuses to sign unless the server
+            // sends server-sig-algs (it assumes legacy ssh-rsa otherwise),
+            // and we advertise "ext-info-s" in KEXINIT, so this must be sent.
+            RegisterExtension("server-sig-algs", string.Join(",", _publicKeyAlgorithms.Keys));
         }
 
         public event EventHandler<EventArgs> Disconnected;
@@ -301,6 +308,15 @@ namespace FxSsh
                 {
                     var message = await ReceiveMessageAsync(token);
                     if (message is null) break;
+
+                    // RFC 4253 7.1: when the client's first_kex_packet_follows
+                    // guess was wrong, the packet it sent right after KEXINIT
+                    // must be discarded before normal processing resumes.
+                    if (_discardNextKexPacket)
+                    {
+                        _discardNextKexPacket = false;
+                        continue;
+                    }
 
                     if (message is UnknownMessage unknownMessage)
                     {
@@ -977,14 +993,22 @@ namespace FxSsh
                 ServerHostKeyAlgorithms = message.ServerHostKeyAlgorithms
             });
 
-            _exchangeContext.KeyExchange = ChooseAlgorithm([.. _keyExchangeAlgorithms.Keys], message.KeyExchangeAlgorithms);
-            _exchangeContext.PublicKey = ChooseAlgorithm(_publicKeyAlgorithms.Keys.Intersect(_hostKey.Keys).ToArray(), message.ServerHostKeyAlgorithms);
-            _exchangeContext.ClientEncryption = ChooseAlgorithm([.. _encryptionAlgorithms.Keys], message.EncryptionAlgorithmsClientToServer);
-            _exchangeContext.ServerEncryption = ChooseAlgorithm([.. _encryptionAlgorithms.Keys], message.EncryptionAlgorithmsServerToClient);
-            _exchangeContext.ClientHmac = ChooseAlgorithm([.. _hmacAlgorithms.Keys], message.MacAlgorithmsClientToServer);
-            _exchangeContext.ServerHmac = ChooseAlgorithm([.. _hmacAlgorithms.Keys], message.MacAlgorithmsServerToClient);
-            _exchangeContext.ClientCompression = ChooseAlgorithm([.. _compressionAlgorithms.Keys], message.CompressionAlgorithmsClientToServer);
-            _exchangeContext.ServerCompression = ChooseAlgorithm([.. _compressionAlgorithms.Keys], message.CompressionAlgorithmsServerToClient);
+            // The bitwise & (not short-circuiting &&) guarantees every out
+            // parameter is assigned even when an earlier check is false.
+            var isGuessed =
+                ChooseAlgorithm([.. _keyExchangeAlgorithms.Keys], message.KeyExchangeAlgorithms, out _exchangeContext.KeyExchange) &
+                ChooseAlgorithm(_publicKeyAlgorithms.Keys.Intersect(_hostKey.Keys).ToArray(), message.ServerHostKeyAlgorithms, out _exchangeContext.PublicKey) &
+                ChooseAlgorithm([.. _encryptionAlgorithms.Keys], message.EncryptionAlgorithmsClientToServer, out _exchangeContext.ClientEncryption) &
+                ChooseAlgorithm([.. _encryptionAlgorithms.Keys], message.EncryptionAlgorithmsServerToClient, out _exchangeContext.ServerEncryption) &
+                ChooseAlgorithm([.. _hmacAlgorithms.Keys], message.MacAlgorithmsClientToServer, out _exchangeContext.ClientHmac) &
+                ChooseAlgorithm([.. _hmacAlgorithms.Keys], message.MacAlgorithmsServerToClient, out _exchangeContext.ServerHmac) &
+                ChooseAlgorithm([.. _compressionAlgorithms.Keys], message.CompressionAlgorithmsClientToServer, out _exchangeContext.ClientCompression) &
+                ChooseAlgorithm([.. _compressionAlgorithms.Keys], message.CompressionAlgorithmsServerToClient, out _exchangeContext.ServerCompression);
+
+            // RFC 4253 7.1: if the client optimistically sent a first KEX
+            // packet and its algorithm guess was wrong, discard that packet.
+            if (message.FirstKexPacketFollows && !isGuessed)
+                _discardNextKexPacket = true;
 
             _exchangeContext.ClientKexInitPayload = message.GetPacket();
 
@@ -1319,12 +1343,14 @@ namespace FxSsh
         }
         #endregion
 
-        private string ChooseAlgorithm(string[] serverAlgorithms, string[] clientAlgorithms)
+        private static bool ChooseAlgorithm(string[] serverAlgorithms, string[] clientAlgorithms, out string chosenAlgorithm)
         {
-            foreach (var client in clientAlgorithms)
-                foreach (var server in serverAlgorithms)
-                    if (client == server)
-                        return client;
+            foreach (var clientAlgorithm in clientAlgorithms)
+                if (serverAlgorithms.Contains(clientAlgorithm))
+                {
+                    chosenAlgorithm = clientAlgorithm;
+                    return clientAlgorithm == clientAlgorithms[0];
+                }
 
             throw new SshConnectionException("Failed to negotiate algorithm.", DisconnectReason.KeyExchangeFailed);
         }
