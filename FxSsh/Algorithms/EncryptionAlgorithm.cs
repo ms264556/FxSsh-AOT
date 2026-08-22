@@ -14,6 +14,15 @@ namespace FxSsh.Algorithms
         // per-packet invoker. Null when _mode is CBC/CTR.
         private readonly GcmModeCryptoTransform _gcmTransform;
 
+        // Plugin AEAD (chacha20-poly1305@openssh.com and friends) branch: a
+        // per-direction transform supplied from outside the library. Null for
+        // the built-in streaming/AES-GCM algorithms.
+        private readonly IAeadTransform _aeadTransform;
+
+        // Plugin AEAD block size in bytes (8 for chacha20-poly1305@openssh.com);
+        // only meaningful when _aeadTransform != null.
+        private readonly int _blockBytesSize;
+
         public EncryptionAlgorithm(SymmetricAlgorithm algorithm, int keySize, CipherModeEx mode, byte[] key, byte[] iv, bool isEncryption)
         {
             ArgumentNullException.ThrowIfNull(key);
@@ -52,7 +61,30 @@ namespace FxSsh.Algorithms
             _algorithm = algorithm;
             _transform = CreateTransform(isEncryption);
             _gcmTransform = null;
+            _aeadTransform = null;
             IsAead = false;
+        }
+
+        /// <summary>
+        /// Plugin AEAD constructor for ciphers supplied from outside the
+        /// library (e.g. chacha20-poly1305@openssh.com, whose transform lives
+        /// in FxSsh.Tests). <paramref name="aeadTransform"/> is a per-direction
+        /// transform built from the KEX-derived key; <paramref name="blockSizeBytes"/>
+        /// drives packet_length / padding alignment (8 for chacha20-poly1305@openssh.com).
+        /// </summary>
+        public EncryptionAlgorithm(IAeadTransform aeadTransform, int blockSizeBytes)
+        {
+            ArgumentNullException.ThrowIfNull(aeadTransform);
+            if (blockSizeBytes <= 0)
+                throw new ArgumentOutOfRangeException(nameof(blockSizeBytes));
+
+            _aeadTransform = aeadTransform;
+            _blockBytesSize = blockSizeBytes;
+            _algorithm = null;
+            _transform = null;
+            _gcmTransform = null;
+            _mode = CipherModeEx.CTR; // unused; BlockBytesSize is plugin-gaured
+            IsAead = true;
         }
 
         /// <summary>
@@ -62,19 +94,24 @@ namespace FxSsh.Algorithms
         /// </summary>
         public bool IsAead { get; }
 
-        /// <summary>Block size in bytes used for padding alignment (16 for AES-GCM).</summary>
+        /// <summary>Block size in bytes used for padding alignment (16 for AES-GCM, 8 for chacha20-poly1305).</summary>
         public int BlockBytesSize
         {
-            get { return _mode == CipherModeEx.GCM ? 16 : _algorithm.BlockSize >> 3; }
+            get
+            {
+                if (_aeadTransform != null) return _blockBytesSize;
+                return _mode == CipherModeEx.GCM ? 16 : _algorithm.BlockSize >> 3;
+            }
         }
 
-        /// <summary>GCM auth tag length (16). Only valid when IsAead.</summary>
+        /// <summary>Auth tag length in bytes (16 for AES-GCM and chacha20-poly1305). Only valid when IsAead.</summary>
         public int TagBytes
         {
             get
             {
+                if (_aeadTransform != null) return _aeadTransform.TagBytes;
                 if (_gcmTransform == null)
-                    throw new InvalidOperationException("TagBytes is only defined for AEAD (GCM) algorithms.");
+                    throw new InvalidOperationException("TagBytes is only defined for AEAD algorithms.");
                 return _gcmTransform.TagBytes;
             }
         }
@@ -167,6 +204,48 @@ namespace FxSsh.Algorithms
             if (_gcmTransform == null)
                 throw new InvalidOperationException("DecryptAead is only valid for GCM.");
             _gcmTransform.Decrypt(aad, ciphertextWithTag, plaintextDestination);
+        }
+
+        /// <summary>True when this cipher is a plugin IAeadTransform (e.g. chacha20-poly1305@openssh.com) rather than built-in AES-GCM.</summary>
+        public bool IsTransformCipher => _aeadTransform != null;
+
+        /// <summary>
+        /// Plugin AEAD: turn the 4 on-wire packet_length bytes into the
+        /// plaintext length (identity for AES-GCM, K2-keystream decrypt for
+        /// chacha20-poly1305@openssh.com). Only valid when
+        /// <see cref="IsTransformCipher"/> is true.
+        /// </summary>
+        public int DecryptPacketLength(uint sequenceNumber, ReadOnlySpan<byte> encryptedLength)
+        {
+            if (_aeadTransform == null)
+                throw new InvalidOperationException("DecryptPacketLength is only valid for plugin AEAD ciphers.");
+            return _aeadTransform.DecryptPacketLength(sequenceNumber, encryptedLength);
+        }
+
+        /// <summary>
+        /// Plugin AEAD: encrypt one SSH packet straight into
+        /// <paramref name="destination"/>. <paramref name="frame"/> is
+        /// [packet_length(4)][padding_length||payload||padding]; output is
+        /// [length_field(4)][ciphertext][tag].
+        /// </summary>
+        public void EncryptAeadPacket(uint sequenceNumber, ReadOnlySpan<byte> frame, Span<byte> destination)
+        {
+            if (_aeadTransform == null)
+                throw new InvalidOperationException("EncryptAeadPacket is only valid for plugin AEAD ciphers.");
+            _aeadTransform.Encrypt(sequenceNumber, frame, destination);
+        }
+
+        /// <summary>
+        /// Plugin AEAD: authenticate and decrypt one SSH packet straight into
+        /// <paramref name="plaintextDestination"/>. <paramref name="lengthField"/>
+        /// is the 4 on-wire length bytes and <paramref name="ciphertextWithTag"/>
+        /// is ciphertext || tag.
+        /// </summary>
+        public void DecryptAeadPacket(uint sequenceNumber, ReadOnlySpan<byte> lengthField, ReadOnlySpan<byte> ciphertextWithTag, Span<byte> plaintextDestination)
+        {
+            if (_aeadTransform == null)
+                throw new InvalidOperationException("DecryptAeadPacket is only valid for plugin AEAD ciphers.");
+            _aeadTransform.Decrypt(sequenceNumber, lengthField, ciphertextWithTag, plaintextDestination);
         }
 
         private ICryptoTransform CreateTransform(bool isEncryption)
