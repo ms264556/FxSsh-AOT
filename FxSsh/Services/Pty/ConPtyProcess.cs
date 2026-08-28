@@ -123,6 +123,14 @@ namespace FxSsh.Services.Pty
 
             var startupInfo = new STARTUPINFOEX();
             startupInfo.StartupInfo.cb = Marshal.SizeOf<STARTUPINFOEX>();
+            // Declare "no standard handles": otherwise the child inherits the
+            // host's std handles, which the debugger redirects to its output
+            // pipes — the shell then writes there instead of into the ConPTY
+            // output pipe, and no data reaches the SSH client.
+            startupInfo.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+            startupInfo.StartupInfo.hStdInput = IntPtr.Zero;
+            startupInfo.StartupInfo.hStdOutput = IntPtr.Zero;
+            startupInfo.StartupInfo.hStdError = IntPtr.Zero;
             startupInfo.lpAttributeList = Marshal.AllocHGlobal(lpSize);
 
             success = InitializeProcThreadAttributeList(

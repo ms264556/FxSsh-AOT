@@ -47,6 +47,7 @@ namespace FxSsh.Services.Pty.Native
         // ---- Process API ----
 
         internal const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+        internal const int STARTF_USESTDHANDLES = 0x00000100;
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
         internal struct STARTUPINFOEX
