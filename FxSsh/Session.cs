@@ -985,6 +985,13 @@ namespace FxSsh
         {
             ConsiderReExchange(true);
 
+            if (Log.IsEnabled(LogLevel.Info))
+                Log.Info("Client cipher suites: " +
+                    $"kex=[{string.Join(",", message.KeyExchangeAlgorithms)}], hostkey=[{string.Join(",", message.ServerHostKeyAlgorithms)}], " +
+                    $"cipher ctos=[{string.Join(",", message.EncryptionAlgorithmsClientToServer)}], stoc=[{string.Join(",", message.EncryptionAlgorithmsServerToClient)}], " +
+                    $"mac ctos=[{string.Join(",", message.MacAlgorithmsClientToServer)}], stoc=[{string.Join(",", message.MacAlgorithmsServerToClient)}], " +
+                    $"compression ctos=[{string.Join(",", message.CompressionAlgorithmsClientToServer)}], stoc=[{string.Join(",", message.CompressionAlgorithmsServerToClient)}].");
+
             KeysExchanged?.Invoke(this, new KeyExchangeArgs(this)
             {
                 CompressionAlgorithmsClientToServer = message.CompressionAlgorithmsClientToServer,

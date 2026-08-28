@@ -62,10 +62,34 @@ namespace FxSsh
             _listenser.Start();
 
             Log.Info($"SSH server listening on {StartingInfo.LocalAddress}:{StartingInfo.Port}.");
+            LogCipherSuites();
 
             _ = AcceptConnectionsAsync(cancellationToken);
 
             return Task.CompletedTask;
+        }
+
+        /// <summary>
+        /// Log the server's cipher suites once at startup. Uses the same
+        /// resolution as Session (null selector = every algorithm supported
+        /// on this platform), with host key names limited to the loaded
+        /// host key types.
+        /// </summary>
+        private void LogCipherSuites()
+        {
+            if (!Log.IsEnabled(LogLevel.Info))
+                return;
+
+            var kex = AlgorithmRegistry.ResolveKeyExchange(Algorithms.KeyExchangeAlgorithms).Keys;
+            var hostKey = AlgorithmRegistry.ResolveHostKey(Algorithms.HostKeyAlgorithms).Keys.Intersect(_hostKey.Keys);
+            var cipher = AlgorithmRegistry.ResolveEncryption(Algorithms.EncryptionAlgorithms).Keys;
+            var mac = AlgorithmRegistry.ResolveMac(Algorithms.MacAlgorithms).Keys;
+            var compression = AlgorithmRegistry.ResolveCompression(Algorithms.CompressionAlgorithms).Keys;
+
+            Log.Info("Server cipher suites: " +
+                $"kex=[{string.Join(",", kex)}], hostkey=[{string.Join(",", hostKey)}], " +
+                $"cipher=[{string.Join(",", cipher)}], mac=[{string.Join(",", mac)}], " +
+                $"compression=[{string.Join(",", compression)}].");
         }
 
         public async Task StopAsync()

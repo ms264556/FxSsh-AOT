@@ -112,7 +112,7 @@ TA==
 
     Log.Configure(new LogOptions
     {
-        MinLevel = LogLevel.Trace,
+        MinLevel = LogLevel.Info,
         Sink = new ConsoleLogSink(),
     });
 
