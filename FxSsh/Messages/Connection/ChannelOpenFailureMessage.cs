@@ -5,7 +5,7 @@ namespace FxSsh.Messages.Connection
     [Message("SSH_MSG_CHANNEL_OPEN_FAILURE", MessageNumber)]
     public class ChannelOpenFailureMessage : ConnectionServiceMessage
     {
-        private const byte MessageNumber = 92;
+        internal const byte MessageNumber = 92;
 
         public uint RecipientChannel { get; set; }
         public ChannelOpenFailureReason ReasonCode { get; set; }

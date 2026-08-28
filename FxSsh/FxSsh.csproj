@@ -2,6 +2,10 @@
 
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
+    <!-- NativeAOT / trimming compatibility: IL2xxx warnings surface any new
+         reflection/dynamic-dispatch that would break AOT publish. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
     <Authors>Aimeast</Authors>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

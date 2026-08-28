@@ -5,7 +5,7 @@ namespace FxSsh.Messages
     [Message("SSH_MSG_SERVICE_ACCEPT", MessageNumber)]
     public class ServiceAcceptMessage : Message
     {
-        private const byte MessageNumber = 6;
+        internal const byte MessageNumber = 6;
 
         public ServiceAcceptMessage(string name)
         {

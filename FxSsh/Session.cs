@@ -37,8 +37,6 @@ namespace FxSsh
         // RFC 4253 section 6: minimum packet size is 16 bytes total, i.e. packet_length >= 12.
         internal const int MinimumPacketLength = 12;
 
-        private static readonly Dictionary<byte, Type> _messagesMetadata;
-
         // Active algorithm set for this session; resolved from the server's
         // AlgorithmSelection in the ctor (see below).
         private readonly Dictionary<string, Func<KexAlgorithm>> _keyExchangeAlgorithms;
@@ -101,18 +99,6 @@ namespace FxSsh
         public T GetService<T>() where T : SshService
         {
             return (T)_services.FirstOrDefault(x => x is T);
-        }
-
-        static Session()
-        {
-            // The default algorithm suites now live in AlgorithmRegistry (see
-            // AlgorithmRegistry.DefaultAlgorithms); this static constructor
-            // only wires up the message metadata table.
-            _messagesMetadata = (from t in typeof(Message).Assembly.GetTypes()
-                                 let attrib = (MessageAttribute)t.GetCustomAttributes(typeof(MessageAttribute), false).FirstOrDefault()
-                                 where attrib != null
-                                 select new { attrib.Number, Type = t })
-                                 .ToDictionary(x => x.Number, x => x.Type);
         }
 
         public Session(Socket socket, Dictionary<string, string> hostKey, string serverBanner, AlgorithmSelection algorithms = null)
@@ -658,18 +644,16 @@ namespace FxSsh
         /// </summary>
         private Message LoadMessage(byte typeNumber, ReadOnlyMemory<byte> data, int packetLength)
         {
+            var implemented = MessageRegistry.TryCreate(typeNumber, out var message);
+            if (!implemented)
+                message = new UnknownMessage { SequenceNumber = _inboundPacketSequence, UnknownMessageType = typeNumber };
+
             if (Log.IsEnabled(LogLevel.Trace))
             {
-                var implemented0 = _messagesMetadata.ContainsKey(typeNumber);
-                Log.Trace(implemented0
-                    ? $"Recv msg={_messagesMetadata[typeNumber].Name} len={packetLength} seq={_inboundPacketSequence}"
+                Log.Trace(implemented
+                    ? $"Recv msg={message.GetType().Name} len={packetLength} seq={_inboundPacketSequence}"
                     : $"Recv msg=Unknown({typeNumber}) len={packetLength} seq={_inboundPacketSequence}");
             }
-
-            var implemented = _messagesMetadata.ContainsKey(typeNumber);
-            var message = implemented
-                ? (Message)Activator.CreateInstance(_messagesMetadata[typeNumber])
-                : new UnknownMessage { SequenceNumber = _inboundPacketSequence, UnknownMessageType = typeNumber };
 
             if (implemented)
                 message.Load(data);
@@ -965,9 +949,31 @@ namespace FxSsh
         #endregion
 
         #region Handle messages
+        // Compile-time dispatch replacing the former (dynamic) binder. Order
+        // matters: concrete KEX subclasses must be matched before their
+        // KeyExchangeXInitMessage base, mirroring the old most-specific
+        // overload binding. Every message number MessageRegistry creates has
+        // a case here; UnknownMessage is answered by the receive loop before
+        // dispatch ever sees it.
         private void HandleMessageCore(Message message)
         {
-            this.HandleMessage((dynamic)message);
+            switch (message)
+            {
+                case DisconnectMessage m: HandleMessage(m); break;
+                case KeyExchangeInitMessage m: HandleMessage(m); break;
+                case KeyExchangeDhInitMessage m: HandleMessage(m); break;
+                case KeyExchangeECDhInitMessage m: HandleMessage(m); break;
+                case KeyExchangeXInitMessage m: HandleMessage(m); break;
+                case NewKeysMessage m: HandleMessage(m); break;
+                case ExtInfoMessage m: HandleMessage(m); break;
+                case UnimplementedMessage m: HandleMessage(m); break;
+                case GlobalRequestMessage m: HandleMessage(m); break;
+                case RequestSuccessMessage m: HandleMessage(m); break;
+                case RequestFailureMessage m: HandleMessage(m); break;
+                case ServiceRequestMessage m: HandleMessage(m); break;
+                case UserAuthServiceMessage m: HandleMessage(m); break;
+                case ConnectionServiceMessage m: HandleMessage(m); break;
+            }
         }
 
         private void HandleMessage(DisconnectMessage message)

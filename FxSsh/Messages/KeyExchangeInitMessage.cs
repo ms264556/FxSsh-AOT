@@ -9,7 +9,7 @@ namespace FxSsh.Messages
     [Message("SSH_MSG_KEXINIT", MessageNumber)]
     public class KeyExchangeInitMessage : Message
     {
-        private const byte MessageNumber = 20;
+        internal const byte MessageNumber = 20;
 
         public KeyExchangeInitMessage()
         {

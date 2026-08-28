@@ -8,7 +8,7 @@ namespace FxSsh.Messages.Connection
     [Message("SSH_MSG_REQUEST_FAILURE", MessageNumber)]
     public class RequestFailureMessage : ConnectionServiceMessage
     {
-        private const byte MessageNumber = 82;
+        internal const byte MessageNumber = 82;
 
         public override byte MessageType { get { return MessageNumber; } }
 

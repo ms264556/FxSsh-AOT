@@ -11,7 +11,7 @@ namespace FxSsh.Messages.Connection
     [Message("SSH_MSG_GLOBAL_REQUEST", MessageNumber)]
     public class GlobalRequestMessage : ConnectionServiceMessage
     {
-        private const byte MessageNumber = 80;
+        internal const byte MessageNumber = 80;
 
         public string RequestName { get; set; }
         public bool WantReply { get; set; }

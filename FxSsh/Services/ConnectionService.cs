@@ -87,7 +87,7 @@ namespace FxSsh.Services
             if (message is ChannelWindowAdjustMessage)
                 // Window adjust must be processed inline (before the queued
                 // messages ahead of it) so send-window accounting stays exact.
-                this.HandleMessage((dynamic)message);
+                Dispatch(message);
             else
             {
                 // The queued message's RawBytes is a zero-copy slice over the
@@ -111,7 +111,7 @@ namespace FxSsh.Services
                 {
                     try
                     {
-                        this.HandleMessage((dynamic)message);
+                        Dispatch(message);
                     }
                     catch (Exception ex)
                     {
@@ -123,6 +123,39 @@ namespace FxSsh.Services
             }
             catch (OperationCanceledException)
             {
+            }
+        }
+
+        /// <summary>
+        /// Compile-time dispatch replacing the former (dynamic) binder.
+        /// Concrete ChannelOpenMessage / ChannelRequestMessage subclasses are
+        /// matched before their bases, mirroring the old most-specific-overload
+        /// dynamic binding (e.g. EnvMessage reaches its own handler rather
+        /// than the ChannelRequestMessage base).
+        /// </summary>
+        private void Dispatch(ConnectionServiceMessage message)
+        {
+            switch (message)
+            {
+                case ForwardedTcpIpMessage m: HandleMessage(m); break;
+                case DirectTcpIpMessage m: HandleMessage(m); break;
+                case SessionOpenMessage m: HandleMessage(m); break;
+                case ChannelOpenMessage m: HandleMessage(m); break;
+                case EnvMessage m: HandleMessage(m); break;
+                case PtyRequestMessage m: HandleMessage(m); break;
+                case WindowChangeMessage m: HandleMessage(m); break;
+                case ShellRequestMessage m: HandleMessage(m); break;
+                case CommandRequestMessage m: HandleMessage(m); break;
+                case SubsystemRequestMessage m: HandleMessage(m); break;
+                case ChannelRequestMessage m: HandleMessage(m); break;
+                case ShouldIgnoreMessage m: HandleMessage(m); break;
+                case GlobalRequestMessage m: HandleMessage(m); break;
+                case ChannelOpenConfirmationMessage m: HandleMessage(m); break;
+                case ChannelOpenFailureMessage m: HandleMessage(m); break;
+                case ChannelDataMessage m: HandleMessage(m); break;
+                case ChannelWindowAdjustMessage m: HandleMessage(m); break;
+                case ChannelEofMessage m: HandleMessage(m); break;
+                case ChannelCloseMessage m: HandleMessage(m); break;
             }
         }
 

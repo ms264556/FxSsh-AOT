@@ -26,7 +26,17 @@ namespace FxSsh.Services
         {
             ArgumentNullException.ThrowIfNull(message);
 
-            this.HandleMessage((dynamic)message);
+            // Compile-time dispatch replacing the former (dynamic) binder.
+            // Concrete RequestMessage subclasses are matched before the
+            // RequestMessage base, mirroring the old most-specific-overload
+            // dynamic binding.
+            switch (message)
+            {
+                case NoneRequestMessage m: HandleMessage(m); break;
+                case PasswordRequestMessage m: HandleMessage(m); break;
+                case PublicKeyRequestMessage m: HandleMessage(m); break;
+                case RequestMessage m: HandleMessage(m); break;
+            }
         }
 
         private void HandleMessage(RequestMessage message)

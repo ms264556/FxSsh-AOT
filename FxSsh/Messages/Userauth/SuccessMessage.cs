@@ -3,7 +3,7 @@
     [Message("SSH_MSG_USERAUTH_SUCCESS", MessageNumber)]
     public class SuccessMessage : UserAuthServiceMessage
     {
-        private const byte MessageNumber = 52;
+        internal const byte MessageNumber = 52;
 
         public override byte MessageType { get { return MessageNumber; } }
 

@@ -14,7 +14,7 @@ namespace FxSsh.Messages
     [Message("SSH_MSG_EXT_INFO", MessageNumber)]
     public class ExtInfoMessage : Message
     {
-        private const byte MessageNumber = 7;
+        internal const byte MessageNumber = 7;
 
         /// <summary>
         /// Extension name -> value dictionary.

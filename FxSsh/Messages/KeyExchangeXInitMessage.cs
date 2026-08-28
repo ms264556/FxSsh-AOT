@@ -3,7 +3,7 @@
     [Message("SSH_MSG_KEXDH_INIT,SSH_MSG_KEX_ECDH_INIT", MessageNumber)]
     public class KeyExchangeXInitMessage : Message
     {
-        private const byte MessageNumber = 30;
+        internal const byte MessageNumber = 30;
 
         public override byte MessageType { get { return MessageNumber; } }
 

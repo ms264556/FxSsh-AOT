@@ -6,7 +6,7 @@ namespace FxSsh.Messages
     [Message("SSH_MSG_DISCONNECT", MessageNumber)]
     public class DisconnectMessage : Message
     {
-        private const byte MessageNumber = 1;
+        internal const byte MessageNumber = 1;
 
         public DisconnectMessage()
         {
