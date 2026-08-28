@@ -37,8 +37,8 @@ namespace FxSsh
         // RFC 4253 section 6: minimum packet size is 16 bytes total, i.e. packet_length >= 12.
         internal const int MinimumPacketLength = 12;
 
-        // Active algorithm set for this session; resolved from the server's
-        // AlgorithmSelection in the ctor (see below).
+        // Active algorithm set for this session; copied from the server's
+        // pluggable AlgorithmSelection registry in the ctor (see below).
         private readonly Dictionary<string, Func<KexAlgorithm>> _keyExchangeAlgorithms;
         internal readonly Dictionary<string, Func<string, PublicKeyAlgorithm>> _publicKeyAlgorithms;
         private readonly Dictionary<string, Func<CipherInfo>> _encryptionAlgorithms;
@@ -111,13 +111,17 @@ namespace FxSsh
             _hostKey = hostKey.ToDictionary(s => s.Key, s => s.Value);
             ServerVersion = serverBanner;
 
-            // Null selectors resolve to every algorithm supported on this
-            // platform; subsets are picked by name from AlgorithmRegistry.
-            _keyExchangeAlgorithms = AlgorithmRegistry.ResolveKeyExchange(algorithms?.KeyExchangeAlgorithms);
-            _publicKeyAlgorithms = AlgorithmRegistry.ResolveHostKey(algorithms?.HostKeyAlgorithms);
-            _encryptionAlgorithms = AlgorithmRegistry.ResolveEncryption(algorithms?.EncryptionAlgorithms);
-            _hmacAlgorithms = AlgorithmRegistry.ResolveMac(algorithms?.MacAlgorithms);
-            _compressionAlgorithms = AlgorithmRegistry.ResolveCompression(algorithms?.CompressionAlgorithms);
+            // The server's pluggable registry (seeded from AlgorithmRegistry
+            // and mutable via SshServer.Algorithms) is the source of truth for
+            // every category. The per-session dictionaries are copies taken at
+            // construction so later mutations to the shared registry do not
+            // disturb an in-flight session.
+            algorithms ??= new AlgorithmSelection();
+            _keyExchangeAlgorithms = algorithms.KeyExchange.ToDictionary(x => x.Key, x => x.Value);
+            _publicKeyAlgorithms = algorithms.PublicKey.ToDictionary(x => x.Key, x => x.Value);
+            _encryptionAlgorithms = algorithms.Encryption.ToDictionary(x => x.Key, x => x.Value);
+            _hmacAlgorithms = algorithms.Hmac.ToDictionary(x => x.Key, x => x.Value);
+            _compressionAlgorithms = algorithms.Compression.ToDictionary(x => x.Key, x => x.Value);
 
             // RFC 8332: advertise which signature algorithms we accept for
             // publickey auth. OpenSSH 8.8+ refuses to sign unless the server
@@ -470,8 +474,10 @@ namespace FxSsh
                 // consumes it.
                 using var lenBuf = await ReadFromPipeAsync(4, token);
                 if (lenBuf.Length == 0) return null;
-                var lenSpan = lenBuf.Span;
-                var packetLength = lenSpan[0] << 24 | lenSpan[1] << 16 | lenSpan[2] << 8 | lenSpan[3];
+                // chacha20-poly1305@openssh.com encrypts the packet_length field,
+                // AES-GCM transmits it plaintext. DecryptPacketLength recovers the
+                // plaintext length either way before it can be validated/bounded.
+                var packetLength = _algorithms.ClientEncryption.DecryptPacketLength(_inboundPacketSequence, lenBuf.Span);
                 if (packetLength < MinimumPacketLength || packetLength > MaximumPacketLength)
                 {
                     throw new SshConnectionException(
@@ -481,7 +487,7 @@ namespace FxSsh
                 }
 
                 // packetLength bytes of ciphertext: padding_length || payload || padding,
-                // followed by the 16-byte GCM tag. Per RFC 5647 section 7.3 the 4-byte
+                // followed by the 16-byte auth tag. Per RFC 5647 section 7.3 the 4-byte
                 // plaintext packet_length (lenBuf) is GCM's Additional Authenticated
                 // Data -- authenticated but not encrypted, covered by the tag.
                 var tagLength = _algorithms.ClientEncryption.TagBytes;
@@ -495,10 +501,11 @@ namespace FxSsh
                 var plaintext = SshBuffers.Packets.Rent(packetLength);
                 try
                 {
-                    // AAD is exactly the 4-byte plaintext packet_length --
-                    // NOT the whole lenBuf rental (ArrayPool hands back at
-                    // least 16 bytes; OpenSSH authenticates exactly 4).
+                    // lengthField is the 4 on-wire length bytes: GCM's AAD, and the
+                    // chacha20-poly1305 tag input (the encrypted length is passed
+                    // verbatim - the transform decrypts/authenticates it itself).
                     _algorithms.ClientEncryption.DecryptAead(
+                        _inboundPacketSequence,
                         lenBuf.ReadOnlySpan,
                         ciphertextWithTag.Array.AsSpan(0, packetLength + tagLength),
                         plaintext);
@@ -802,15 +809,13 @@ namespace FxSsh
                     if (isAead)
                     {
                         // RFC 5647 section 3 + 7.3 AEAD layout:
-                        // [packet_length(4, plaintext)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
-                        // The 4-byte plaintext packet_length is GCM's AAD
-                        // (authenticated but not encrypted). Encrypt straight into
-                        // the rented sendBuf - no intermediate ciphertext array.
-                        frame.Slice(0, 4).CopyTo(wire);
-                        _algorithms.ServerEncryption.EncryptAead(
-                            frame.Slice(0, 4),
-                            frame.Slice(4),
-                            wire.Slice(4));
+                        // [length_field(4)][ciphertext = encrypt(padding_length||payload||padding)][tag(16)].
+                        // The AEAD transform owns the length field and the inline
+                        // tag: GCM transmits packet_length as plaintext AAD
+                        // (authenticated but not encrypted), chacha20-poly1305@openssh.com
+                        // encrypts it. Encrypt straight into the rented sendBuf -
+                        // no intermediate ciphertext array.
+                        _algorithms.ServerEncryption.EncryptAead(_outboundPacketSequence, frame, wire);
                     }
                     else if (_algorithms.ServerHmacIsEtm)
                     {
@@ -1042,7 +1047,7 @@ namespace FxSsh
             // host-key-based dispatch would have misrouted to the DH parser.
             var kex = _exchangeContext.KeyExchange;
             if (kex.StartsWith("curve25519-", StringComparison.Ordinal) || kex.StartsWith("ecdh-", StringComparison.Ordinal)
-                || kex.StartsWith("mlkem", StringComparison.Ordinal))
+                || kex.StartsWith("mlkem", StringComparison.Ordinal) || kex.StartsWith("sntrup", StringComparison.Ordinal))
                 message = Message.LoadFrom<KeyExchangeECDhInitMessage>(message);
             else if (kex.StartsWith("diffie-hellman-", StringComparison.Ordinal))
                 message = Message.LoadFrom<KeyExchangeDhInitMessage>(message);

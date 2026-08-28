@@ -35,10 +35,12 @@ namespace FxSsh
         public StartingInfo StartingInfo { get; private set; }
 
         /// <summary>
-        /// Per-server algorithm selection. Null selectors (the default) load
-        /// every algorithm supported on this platform; see AlgorithmRegistry.
-        /// EncryptionAlgorithms and friends for the available choices, and
-        /// assign a subset to restrict a category.
+        /// Per-server pluggable algorithm registry, seeded from the
+        /// <see cref="AlgorithmRegistry"/> defaults supported on this platform.
+        /// Mutate (Add/Remove) the exposed per-category collections to plug in
+        /// extra algorithms (e.g. curve25519-sha256 or legacy algos) per server,
+        /// without forking the library. Mutations are reflected in the KEXINIT
+        /// name-lists and in negotiation.
         /// </summary>
         public AlgorithmSelection Algorithms { get; } = new();
 
@@ -80,11 +82,11 @@ namespace FxSsh
             if (!Log.IsEnabled(LogLevel.Info))
                 return;
 
-            var kex = AlgorithmRegistry.ResolveKeyExchange(Algorithms.KeyExchangeAlgorithms).Keys;
-            var hostKey = AlgorithmRegistry.ResolveHostKey(Algorithms.HostKeyAlgorithms).Keys.Intersect(_hostKey.Keys);
-            var cipher = AlgorithmRegistry.ResolveEncryption(Algorithms.EncryptionAlgorithms).Keys;
-            var mac = AlgorithmRegistry.ResolveMac(Algorithms.MacAlgorithms).Keys;
-            var compression = AlgorithmRegistry.ResolveCompression(Algorithms.CompressionAlgorithms).Keys;
+            var kex = Algorithms.KeyExchange.Select(x => x.Key);
+            var hostKey = Algorithms.PublicKey.Select(x => x.Key).Intersect(_hostKey.Keys);
+            var cipher = Algorithms.Encryption.Select(x => x.Key);
+            var mac = Algorithms.Hmac.Select(x => x.Key);
+            var compression = Algorithms.Compression.Select(x => x.Key);
 
             Log.Info("Server cipher suites: " +
                 $"kex=[{string.Join(",", kex)}], hostkey=[{string.Join(",", hostKey)}], " +

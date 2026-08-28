@@ -156,25 +156,133 @@ namespace FxSsh.Algorithms
     }
 
     /// <summary>
-    /// Per-server algorithm selection. Each selector is null by default,
-    /// meaning "use every algorithm in the corresponding AlgorithmRegistry
-    /// option list"; assign a subset of the list to restrict that category.
+    /// A named set of algorithms that can only be mutated through
+    /// <see cref="AlgorithmSelection.ConfigureHazmat"/>. Enumerating it yields
+    /// each entry's (name, factory) in server preference order; the underlying
+    /// dictionary type is never exposed.
+    /// </summary>
+    public interface IHazmatCollection<T> : IEnumerable<KeyValuePair<string, T>>
+    {
+        /// <summary>Register or replace an algorithm factory under a name.</summary>
+        void Add(string name, T factory);
+
+        /// <summary>Remove an algorithm by name; returns false if it was absent.</summary>
+        bool Remove(string name);
+
+        /// <summary>True if an algorithm is registered under the name.</summary>
+        bool Contains(string name);
+
+        /// <summary>Number of registered algorithms.</summary>
+        int Count { get; }
+    }
+
+    /// <summary>
+    /// Mutable view of the server's algorithm registry, handed only to
+    /// <see cref="AlgorithmSelection.ConfigureHazmat"/>. Consumers use Add
+    /// (register/replace) or Remove by name to plug in algorithms - a
+    /// deliberately dangerous ("HazMat") operation that is the only way the
+    /// registry may be changed after construction.
+    /// </summary>
+    public sealed class AlgorithmCatalog
+    {
+        internal AlgorithmCatalog(
+            IHazmatCollection<Func<KexAlgorithm>> keyExchange,
+            IHazmatCollection<Func<string, PublicKeyAlgorithm>> publicKey,
+            IHazmatCollection<Func<CipherInfo>> encryption,
+            IHazmatCollection<Func<HmacInfo>> hmac,
+            IHazmatCollection<Func<CompressionAlgorithm>> compression)
+        {
+            KeyExchange = keyExchange;
+            PublicKey = publicKey;
+            Encryption = encryption;
+            Hmac = hmac;
+            Compression = compression;
+        }
+
+        /// <summary>Key exchange algorithms, in server preference order.</summary>
+        public IHazmatCollection<Func<KexAlgorithm>> KeyExchange { get; }
+
+        /// <summary>Host key / signature algorithms, in server preference order.</summary>
+        public IHazmatCollection<Func<string, PublicKeyAlgorithm>> PublicKey { get; }
+
+        /// <summary>Encryption (cipher) algorithms, in server preference order.</summary>
+        public IHazmatCollection<Func<CipherInfo>> Encryption { get; }
+
+        /// <summary>MAC algorithms, in server preference order.</summary>
+        public IHazmatCollection<Func<HmacInfo>> Hmac { get; }
+
+        /// <summary>Compression algorithms, in server preference order.</summary>
+        public IHazmatCollection<Func<CompressionAlgorithm>> Compression { get; }
+    }
+
+    /// <summary>
+    /// Per-server algorithm registry, seeded with every algorithm supported on
+    /// this platform (matching upstream's null-selector default). The registry
+    /// is read-only to consumers - it may only be changed through
+    /// <see cref="ConfigureHazmat"/>, which hands a mutable
+    /// <see cref="AlgorithmCatalog"/> to a callback. Insertion order is the
+    /// server's preference order when it advertises its KEXINIT name-lists.
     /// </summary>
     public sealed class AlgorithmSelection
     {
-        /// <summary>Key exchange selector; null = all supported defaults.</summary>
-        public IReadOnlyList<string>? KeyExchangeAlgorithms { get; set; }
+        private sealed class AlgorithmCollection<T> : IHazmatCollection<T>
+        {
+            private readonly OrderedDictionary<string, T> _items;
 
-        /// <summary>Host key selector; null = all supported defaults.</summary>
-        public IReadOnlyList<string>? HostKeyAlgorithms { get; set; }
+            public AlgorithmCollection(IEnumerable<KeyValuePair<string, T>> seed)
+            {
+                _items = new OrderedDictionary<string, T>();
+                foreach (var kv in seed)
+                    _items[kv.Key] = kv.Value;
+            }
 
-        /// <summary>Encryption (cipher) selector; null = all supported defaults.</summary>
-        public IReadOnlyList<string>? EncryptionAlgorithms { get; set; }
+            public void Add(string name, T factory) => _items[name] = factory;
+            public bool Remove(string name) => _items.Remove(name);
+            public bool Contains(string name) => _items.ContainsKey(name);
+            public int Count => _items.Count;
 
-        /// <summary>MAC selector; null = all supported defaults.</summary>
-        public IReadOnlyList<string>? MacAlgorithms { get; set; }
+            public IEnumerator<KeyValuePair<string, T>> GetEnumerator() =>
+                ((IEnumerable<KeyValuePair<string, T>>)_items).GetEnumerator();
 
-        /// <summary>Compression selector; null = all supported defaults.</summary>
-        public IReadOnlyList<string>? CompressionAlgorithms { get; set; }
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
+        private readonly AlgorithmCollection<Func<KexAlgorithm>> _keyExchange;
+        private readonly AlgorithmCollection<Func<string, PublicKeyAlgorithm>> _publicKey;
+        private readonly AlgorithmCollection<Func<CipherInfo>> _encryption;
+        private readonly AlgorithmCollection<Func<HmacInfo>> _hmac;
+        private readonly AlgorithmCollection<Func<CompressionAlgorithm>> _compression;
+
+        public AlgorithmSelection()
+        {
+            // Null selectors resolve to every algorithm supported on this
+            // platform, matching upstream's default.
+            _keyExchange = new AlgorithmCollection<Func<KexAlgorithm>>(AlgorithmRegistry.ResolveKeyExchange(null));
+            _publicKey = new AlgorithmCollection<Func<string, PublicKeyAlgorithm>>(AlgorithmRegistry.ResolveHostKey(null));
+            _encryption = new AlgorithmCollection<Func<CipherInfo>>(AlgorithmRegistry.ResolveEncryption(null));
+            _hmac = new AlgorithmCollection<Func<HmacInfo>>(AlgorithmRegistry.ResolveMac(null));
+            _compression = new AlgorithmCollection<Func<CompressionAlgorithm>>(AlgorithmRegistry.ResolveCompression(null));
+        }
+
+        /// <summary>
+        /// The only way to change the algorithm registry. The callback receives
+        /// a mutable <see cref="AlgorithmCatalog"/> whose per-category
+        /// collections may be added to or removed from; outside this method the
+        /// registry is read-only. Named "HazMat" to signal that mutating the
+        /// advertised algorithm set is an expert-only operation.
+        /// </summary>
+        public void ConfigureHazmat(Action<AlgorithmCatalog> configure)
+        {
+            ArgumentNullException.ThrowIfNull(configure);
+            configure(new AlgorithmCatalog(_keyExchange, _publicKey, _encryption, _hmac, _compression));
+        }
+
+        // Read access for the library internals (Session / SshServer). These are
+        // deliberately not public - consumers see only ConfigureHazmat.
+        internal IEnumerable<KeyValuePair<string, Func<KexAlgorithm>>> KeyExchange => _keyExchange;
+        internal IEnumerable<KeyValuePair<string, Func<string, PublicKeyAlgorithm>>> PublicKey => _publicKey;
+        internal IEnumerable<KeyValuePair<string, Func<CipherInfo>>> Encryption => _encryption;
+        internal IEnumerable<KeyValuePair<string, Func<HmacInfo>>> Hmac => _hmac;
+        internal IEnumerable<KeyValuePair<string, Func<CompressionAlgorithm>>> Compression => _compression;
     }
 }
