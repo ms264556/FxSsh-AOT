@@ -1,7 +1,9 @@
 ﻿using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using FxSsh.Logging;
 
 #nullable enable
@@ -80,6 +82,23 @@ namespace FxSsh.Algorithms
         /// <summary>Compression algorithms selectable on this platform, in priority order.</summary>
         public static readonly IReadOnlyList<string> CompressionAlgorithms = SupportedNames(CompressionCatalog);
 
+        // Obsolete built-ins (revivable via HazmatAlgorithmList.Enable). Their
+        // factories are supplied here so Enable/AddAlias can reference them as
+        // built-in names. aes256-cbc / 3des-cbc are not implemented (stubs throw)
+        // per the project's "no new algorithms in core" policy; curve25519-sha256@libssh.org
+        // reuses the existing X25519 key exchange.
+
+        internal static readonly (string Name, Func<KexAlgorithm> Factory)[] ObsoleteKeyExchange =
+        [
+            ("curve25519-sha256@libssh.org", () => new X25519Kex()),
+        ];
+
+        internal static readonly (string Name, Func<CipherInfo> Factory)[] ObsoleteEncryption =
+        [
+            ("aes256-cbc", () => throw new NotSupportedException("aes256-cbc is not implemented in the core library.")),
+            ("3des-cbc", () => throw new NotSupportedException("3des-cbc is not implemented in the core library.")),
+        ];
+
         // --- Resolution: null selector = all supported, list = subset by name ---
 
         internal static Dictionary<string, Func<KexAlgorithm>> ResolveKeyExchange(IReadOnlyList<string>? selected)
@@ -156,41 +175,218 @@ namespace FxSsh.Algorithms
     }
 
     /// <summary>
-    /// A named set of algorithms that can only be mutated through
-    /// <see cref="AlgorithmSelection.ConfigureHazmat"/>. Enumerating it yields
-    /// each entry's (name, factory) in server preference order; the underlying
-    /// dictionary type is never exposed.
+    /// The lifecycle state of an algorithm entry in a
+    /// <see cref="HazmatAlgorithmList{TFactory}"/>.
     /// </summary>
-    public interface IHazmatCollection<T> : IEnumerable<KeyValuePair<string, T>>
+    public enum HazmatAlgorithmTag
     {
-        /// <summary>Register or replace an algorithm factory under a name.</summary>
-        void Add(string name, T factory);
+        /// <summary>A core algorithm shipped and reviewed by the library.</summary>
+        BuiltIn,
 
-        /// <summary>Remove an algorithm by name; returns false if it was absent.</summary>
-        bool Remove(string name);
+        /// <summary>An algorithm registered by the application via <c>Add</c>.</summary>
+        Custom,
 
-        /// <summary>True if an algorithm is registered under the name.</summary>
-        bool Contains(string name);
+        /// <summary>A second name for a built-in, introduced via <c>AddAlias</c>.</summary>
+        Alias,
 
-        /// <summary>Number of registered algorithms.</summary>
-        int Count { get; }
+        /// <summary>A built-in algorithm that is weakly-configured by default and revivable via <c>Enable</c>.</summary>
+        Obsolete,
+    }
+
+    /// <summary>
+    /// A named, ordered collection of algorithm factories for one category of the
+    /// server's algorithm registry. Readable at any time (Count, Contains,
+    /// enumeration) but only mutable through a <see cref="HazmatAlgorithmCatalog"/>
+    /// handed to <see cref="AlgorithmSelection.ConfigureHazmat"/>. The list is
+    /// seeded with the platform's supported built-ins; entries may be added,
+    /// aliased, enabled, removed, or cleared via the catalog.
+    /// </summary>
+    public sealed class HazmatAlgorithmList<TFactory> : IEnumerable<KeyValuePair<string, TFactory>>
+    {
+        private readonly List<Entry> _entries = [];
+        private readonly HashSet<string> _builtInNames;
+        private readonly Dictionary<string, (TFactory Factory, bool Obsolete)> _builtIn;
+        private readonly string _category;
+        private bool _writeScope;
+
+        private sealed class Entry
+        {
+            public required string Name;
+            public required TFactory Factory;
+            public required HazmatAlgorithmTag Tag;
+        }
+
+        internal HazmatAlgorithmList(
+            string category,
+            IEnumerable<KeyValuePair<string, TFactory>> activeBuiltIns,
+            IEnumerable<(string Name, TFactory Factory)> obsoleteBuiltIns)
+        {
+            _category = category;
+            _builtIn = new Dictionary<string, (TFactory Factory, bool Obsolete)>();
+            foreach (var kv in activeBuiltIns)
+                _builtIn[kv.Key] = (kv.Value, false);
+            foreach (var (name, factory) in obsoleteBuiltIns)
+                _builtIn[name] = (factory, true);
+            _builtInNames = new HashSet<string>(_builtIn.Keys, StringComparer.Ordinal);
+
+            foreach (var kv in activeBuiltIns)
+                _entries.Add(new Entry { Name = kv.Key, Factory = kv.Value, Tag = HazmatAlgorithmTag.BuiltIn });
+        }
+
+        /// <summary>The number of entries currently in the list.</summary>
+        public int Count => _entries.Count;
+
+        /// <summary>True if an algorithm is registered under the given name.</summary>
+        public bool Contains(string name) => _entries.Any(e => e.Name == name);
+
+        /// <summary>
+        /// Register or replace a factory under a name. The entry is tagged
+        /// <see cref="HazmatAlgorithmTag.Custom"/> (replacing keeps any existing
+        /// position). Only valid inside <see cref="AlgorithmSelection.ConfigureHazmat"/>.
+        /// </summary>
+        public void Add(string name, TFactory factory)
+        {
+            EnsureWriteScope();
+            ArgumentNullException.ThrowIfNull(name);
+            ArgumentNullException.ThrowIfNull(factory);
+            EnsureValidName(name);
+
+            var existing = _entries.FirstOrDefault(e => e.Name == name);
+            if (existing != null)
+            {
+                // Replace in place, keeping the entry's position/order.
+                existing.Factory = factory;
+                existing.Tag = HazmatAlgorithmTag.Custom;
+                existing.Name = name;
+                return;
+            }
+
+            _entries.Add(new Entry { Name = name, Factory = factory, Tag = HazmatAlgorithmTag.Custom });
+        }
+
+        /// <summary>
+        /// Add a second name for a built-in, reusing its factory directly. The
+        /// alias is placed immediately after its target. Aliasing an obsolete
+        /// built-in implicitly enables that target and inherits the Obsolete tag.
+        /// Only valid inside <see cref="AlgorithmSelection.ConfigureHazmat"/>.
+        /// </summary>
+        /// <exception cref="KeyNotFoundException">The target is not a built-in name.</exception>
+        public void AddAlias(string aliasName, string targetName)
+        {
+            EnsureWriteScope();
+            ArgumentNullException.ThrowIfNull(aliasName);
+            ArgumentNullException.ThrowIfNull(targetName);
+            EnsureValidName(aliasName);
+
+            if (!_builtIn.TryGetValue(targetName, out var target))
+                throw new KeyNotFoundException($"AddAlias target '{targetName}' is not a known {_category} built-in.");
+
+            // Remove any existing entry under the alias name first.
+            _entries.RemoveAll(e => e.Name == aliasName);
+
+            var severity = target.Obsolete ? HazmatAlgorithmTag.Obsolete : HazmatAlgorithmTag.BuiltIn;
+
+            // If an alias targets an (enabled) obsolete built-in, that built-in
+            // is already present; otherwise if it's disabled we append it so the
+            // alias has a concrete adjacent target ("implicitly enables it").
+            if (target.Obsolete && !Contains(targetName))
+            {
+                _entries.Add(new Entry { Name = targetName, Factory = target.Factory, Tag = HazmatAlgorithmTag.Obsolete });
+            }
+
+            var targetIndex = _entries.FindIndex(e => e.Name == targetName);
+            _entries.Insert(targetIndex + 1, new Entry { Name = aliasName, Factory = target.Factory, Tag = severity });
+        }
+
+        /// <summary>
+        /// Remove an entry by name. Returns false (without throwing) if the name
+        /// is absent. The null/obsolete built-ins stay in the built-in inventory so
+        /// they can be re-added or aliased later. Only valid inside
+        /// <see cref="AlgorithmSelection.ConfigureHazmat"/>.
+        /// </summary>
+        public bool Remove(string name)
+        {
+            EnsureWriteScope();
+            ArgumentNullException.ThrowIfNull(name);
+            return _entries.RemoveAll(e => e.Name == name) > 0;
+        }
+
+        /// <summary>
+        /// Remove every entry (the escape hatch for full reordering). The built-in
+        /// inventory is unaffected, so <see cref="Add"/> can re-add them in any order.
+        /// Only valid inside <see cref="AlgorithmSelection.ConfigureHazmat"/>.
+        /// </summary>
+        public void Clear()
+        {
+            EnsureWriteScope();
+            _entries.Clear();
+        }
+
+        /// <summary>
+        /// Revive one obsolete built-in, appending it at the end of the category
+        /// with the <see cref="HazmatAlgorithmTag.Obsolete"/> tag.
+        /// Only valid inside <see cref="AlgorithmSelection.ConfigureHazmat"/>.
+        /// </summary>
+        /// <exception cref="KeyNotFoundException">The name is not a known obsolete built-in.</exception>
+        /// <exception cref="InvalidOperationException">The algorithm is not an obsolete built-in or is already enabled.</exception>
+        public void Enable(string name)
+        {
+            EnsureWriteScope();
+            ArgumentNullException.ThrowIfNull(name);
+
+            if (!_builtIn.TryGetValue(name, out var entry) || !entry.Obsolete)
+                throw new KeyNotFoundException($"'{name}' is not an obsolete {_category} built-in that can be enabled.");
+
+            if (Contains(name))
+                throw new InvalidOperationException($"Obsolete {_category} algorithm '{name}' is already enabled.");
+
+            _entries.Add(new Entry { Name = name, Factory = entry.Factory, Tag = HazmatAlgorithmTag.Obsolete });
+        }
+
+        // --- Internal reads used by the library and the hazmat catalog ---
+
+        internal IEnumerable<(string Name, TFactory Factory, HazmatAlgorithmTag Tag)> TaggedEntries
+            => _entries.Select(e => (e.Name, e.Factory, e.Tag));
+
+        internal void OpenWriteScope() => _writeScope = true;
+        internal void CloseWriteScope() => _writeScope = false;
+
+        public IEnumerator<KeyValuePair<string, TFactory>> GetEnumerator()
+            => _entries.Select(e => new KeyValuePair<string, TFactory>(e.Name, e.Factory)).GetEnumerator();
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+        private void EnsureWriteScope()
+        {
+            if (!_writeScope)
+                throw new InvalidOperationException(
+                    "HazmatAlgorithmList may only be mutated inside the AlgorithmSelection.ConfigureHazmat callback.");
+        }
+
+        private static readonly Regex SshAlgorithmName = new(@"^[A-Za-z0-9]([A-Za-z0-9\-._@]*[A-Za-z0-9@])?$", RegexOptions.Compiled);
+
+        private static void EnsureValidName(string name)
+        {
+            if (!SshAlgorithmName.IsMatch(name))
+                throw new InvalidOperationException($"Algorithm name '{name}' does not match the SSH algorithm-name grammar.");
+        }
     }
 
     /// <summary>
     /// Mutable view of the server's algorithm registry, handed only to
-    /// <see cref="AlgorithmSelection.ConfigureHazmat"/>. Consumers use Add
-    /// (register/replace) or Remove by name to plug in algorithms - a
-    /// deliberately dangerous ("HazMat") operation that is the only way the
-    /// registry may be changed after construction.
+    /// <see cref="AlgorithmSelection.ConfigureHazmat"/>. The object is valid only
+    /// inside the callback; capturing it (or any of its lists) for later mutation
+    /// throws. Named "HazMat" to signal that mutating the advertised algorithm
+    /// set is an expert-only operation that bypasses the built-in security story.
     /// </summary>
-    public sealed class AlgorithmCatalog
+    public sealed class HazmatAlgorithmCatalog
     {
-        internal AlgorithmCatalog(
-            IHazmatCollection<Func<KexAlgorithm>> keyExchange,
-            IHazmatCollection<Func<string, PublicKeyAlgorithm>> publicKey,
-            IHazmatCollection<Func<CipherInfo>> encryption,
-            IHazmatCollection<Func<HmacInfo>> hmac,
-            IHazmatCollection<Func<CompressionAlgorithm>> compression)
+        internal HazmatAlgorithmCatalog(
+            HazmatAlgorithmList<Func<KexAlgorithm>> keyExchange,
+            HazmatAlgorithmList<Func<string, PublicKeyAlgorithm>> publicKey,
+            HazmatAlgorithmList<Func<CipherInfo>> encryption,
+            HazmatAlgorithmList<Func<HmacInfo>> hmac,
+            HazmatAlgorithmList<Func<CompressionAlgorithm>> compression)
         {
             KeyExchange = keyExchange;
             PublicKey = publicKey;
@@ -200,89 +396,243 @@ namespace FxSsh.Algorithms
         }
 
         /// <summary>Key exchange algorithms, in server preference order.</summary>
-        public IHazmatCollection<Func<KexAlgorithm>> KeyExchange { get; }
+        public HazmatAlgorithmList<Func<KexAlgorithm>> KeyExchange { get; }
 
         /// <summary>Host key / signature algorithms, in server preference order.</summary>
-        public IHazmatCollection<Func<string, PublicKeyAlgorithm>> PublicKey { get; }
+        public HazmatAlgorithmList<Func<string, PublicKeyAlgorithm>> PublicKey { get; }
 
         /// <summary>Encryption (cipher) algorithms, in server preference order.</summary>
-        public IHazmatCollection<Func<CipherInfo>> Encryption { get; }
+        public HazmatAlgorithmList<Func<CipherInfo>> Encryption { get; }
 
         /// <summary>MAC algorithms, in server preference order.</summary>
-        public IHazmatCollection<Func<HmacInfo>> Hmac { get; }
+        public HazmatAlgorithmList<Func<HmacInfo>> Hmac { get; }
 
         /// <summary>Compression algorithms, in server preference order.</summary>
-        public IHazmatCollection<Func<CompressionAlgorithm>> Compression { get; }
+        public HazmatAlgorithmList<Func<CompressionAlgorithm>> Compression { get; }
     }
 
     /// <summary>
-    /// Per-server algorithm registry, seeded with every algorithm supported on
-    /// this platform (matching upstream's null-selector default). The registry
-    /// is read-only to consumers - it may only be changed through
-    /// <see cref="ConfigureHazmat"/>, which hands a mutable
-    /// <see cref="AlgorithmCatalog"/> to a callback. Insertion order is the
-    /// server's preference order when it advertises its KEXINIT name-lists.
+    /// Per-server algorithm selection. Each selector is null by default, meaning
+    /// "use every algorithm in the corresponding registry", and may be assigned a
+    /// subset of the matching <see cref="AlgorithmRegistry"/> option list to
+    /// restrict that category. A server (or session) may additionally register
+    /// custom/legacy algorithms via <see cref="ConfigureHazmat"/> before it starts.
     /// </summary>
     public sealed class AlgorithmSelection
     {
-        private sealed class AlgorithmCollection<T> : IHazmatCollection<T>
-        {
-            private readonly OrderedDictionary<string, T> _items;
+        private readonly HazmatAlgorithmList<Func<KexAlgorithm>> _keyExchange;
+        private readonly HazmatAlgorithmList<Func<string, PublicKeyAlgorithm>> _publicKey;
+        private readonly HazmatAlgorithmList<Func<CipherInfo>> _encryption;
+        private readonly HazmatAlgorithmList<Func<HmacInfo>> _hmac;
+        private readonly HazmatAlgorithmList<Func<CompressionAlgorithm>> _compression;
 
-            public AlgorithmCollection(IEnumerable<KeyValuePair<string, T>> seed)
-            {
-                _items = new OrderedDictionary<string, T>();
-                foreach (var kv in seed)
-                    _items[kv.Key] = kv.Value;
-            }
-
-            public void Add(string name, T factory) => _items[name] = factory;
-            public bool Remove(string name) => _items.Remove(name);
-            public bool Contains(string name) => _items.ContainsKey(name);
-            public int Count => _items.Count;
-
-            public IEnumerator<KeyValuePair<string, T>> GetEnumerator() =>
-                ((IEnumerable<KeyValuePair<string, T>>)_items).GetEnumerator();
-
-            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
-        }
-
-        private readonly AlgorithmCollection<Func<KexAlgorithm>> _keyExchange;
-        private readonly AlgorithmCollection<Func<string, PublicKeyAlgorithm>> _publicKey;
-        private readonly AlgorithmCollection<Func<CipherInfo>> _encryption;
-        private readonly AlgorithmCollection<Func<HmacInfo>> _hmac;
-        private readonly AlgorithmCollection<Func<CompressionAlgorithm>> _compression;
+        private bool _started;
+        private bool _hazmatConfigured;
 
         public AlgorithmSelection()
         {
             // Null selectors resolve to every algorithm supported on this
             // platform, matching upstream's default.
-            _keyExchange = new AlgorithmCollection<Func<KexAlgorithm>>(AlgorithmRegistry.ResolveKeyExchange(null));
-            _publicKey = new AlgorithmCollection<Func<string, PublicKeyAlgorithm>>(AlgorithmRegistry.ResolveHostKey(null));
-            _encryption = new AlgorithmCollection<Func<CipherInfo>>(AlgorithmRegistry.ResolveEncryption(null));
-            _hmac = new AlgorithmCollection<Func<HmacInfo>>(AlgorithmRegistry.ResolveMac(null));
-            _compression = new AlgorithmCollection<Func<CompressionAlgorithm>>(AlgorithmRegistry.ResolveCompression(null));
+            _keyExchange = new HazmatAlgorithmList<Func<KexAlgorithm>>(
+                "key exchange",
+                AlgorithmRegistry.ResolveKeyExchange(null),
+                AlgorithmRegistry.ObsoleteKeyExchange);
+            _publicKey = new HazmatAlgorithmList<Func<string, PublicKeyAlgorithm>>(
+                "host key",
+                AlgorithmRegistry.ResolveHostKey(null),
+                []);
+            _encryption = new HazmatAlgorithmList<Func<CipherInfo>>(
+                "encryption",
+                AlgorithmRegistry.ResolveEncryption(null),
+                AlgorithmRegistry.ObsoleteEncryption);
+            _hmac = new HazmatAlgorithmList<Func<HmacInfo>>(
+                "MAC",
+                AlgorithmRegistry.ResolveMac(null),
+                []);
+            _compression = new HazmatAlgorithmList<Func<CompressionAlgorithm>>(
+                "compression",
+                AlgorithmRegistry.ResolveCompression(null),
+                []);
         }
+
+        /// <summary>Key exchange selector; null = all supported defaults.</summary>
+        public IReadOnlyList<string>? KeyExchangeAlgorithms { get; set; }
+
+        /// <summary>Host key selector; null = all supported defaults.</summary>
+        public IReadOnlyList<string>? HostKeyAlgorithms { get; set; }
+
+        /// <summary>Encryption (cipher) selector; null = all supported defaults.</summary>
+        public IReadOnlyList<string>? EncryptionAlgorithms { get; set; }
+
+        /// <summary>MAC selector; null = all supported defaults.</summary>
+        public IReadOnlyList<string>? MacAlgorithms { get; set; }
+
+        /// <summary>Compression selector; null = all supported defaults.</summary>
+        public IReadOnlyList<string>? CompressionAlgorithms { get; set; }
+
+        /// <summary>True once <see cref="ConfigureHazmat"/> has been invoked.</summary>
+        public bool IsHazmatConfigured => _hazmatConfigured;
 
         /// <summary>
-        /// The only way to change the algorithm registry. The callback receives
-        /// a mutable <see cref="AlgorithmCatalog"/> whose per-category
-        /// collections may be added to or removed from; outside this method the
-        /// registry is read-only. Named "HazMat" to signal that mutating the
-        /// advertised algorithm set is an expert-only operation.
+        /// The only way to mutate the algorithm registry after construction, and
+        /// therefore the only way to plug in custom or legacy algorithms. May be
+        /// called multiple times before the server starts (calls compose in order);
+        /// throws afterwards. The callback receives a
+        /// <see cref="HazmatAlgorithmCatalog"/> valid only for the duration of the
+        /// callback; capturing the catalog (or any of its lists) for later use or
+        /// mutation throws.
         /// </summary>
-        public void ConfigureHazmat(Action<AlgorithmCatalog> configure)
+        public void ConfigureHazmat(Action<HazmatAlgorithmCatalog> configure)
         {
             ArgumentNullException.ThrowIfNull(configure);
-            configure(new AlgorithmCatalog(_keyExchange, _publicKey, _encryption, _hmac, _compression));
+            if (_started)
+                throw new InvalidOperationException("ConfigureHazmat may only be called before the server starts.");
+
+            // Snapshot the current names for use in the config-time diff logging.
+            var before = Snapshot();
+
+            var catalog = new HazmatAlgorithmCatalog(_keyExchange, _publicKey, _encryption, _hmac, _compression);
+            _keyExchange.OpenWriteScope();
+            _publicKey.OpenWriteScope();
+            _encryption.OpenWriteScope();
+            _hmac.OpenWriteScope();
+            _compression.OpenWriteScope();
+            try
+            {
+                configure(catalog);
+            }
+            finally
+            {
+                _keyExchange.CloseWriteScope();
+                _publicKey.CloseWriteScope();
+                _encryption.CloseWriteScope();
+                _hmac.CloseWriteScope();
+                _compression.CloseWriteScope();
+            }
+
+            // Fail-fast validation at the callback boundary: factory nullability
+            // and grammar are enforced per-mutation; uniqueness is re-checked here
+            // because Alias/Replace operations could otherwise produce a duplicate.
+            EnsureUnique(_keyExchange, "key exchange");
+            EnsureUnique(_publicKey, "host key");
+            EnsureUnique(_encryption, "encryption");
+            EnsureUnique(_hmac, "MAC");
+            EnsureUnique(_compression, "compression");
+
+            LogConfigDiff(before);
+
+            _hazmatConfigured = true;
         }
 
-        // Read access for the library internals (Session / SshServer). These are
-        // deliberately not public - consumers see only ConfigureHazmat.
-        internal IEnumerable<KeyValuePair<string, Func<KexAlgorithm>>> KeyExchange => _keyExchange;
-        internal IEnumerable<KeyValuePair<string, Func<string, PublicKeyAlgorithm>>> PublicKey => _publicKey;
-        internal IEnumerable<KeyValuePair<string, Func<CipherInfo>>> Encryption => _encryption;
-        internal IEnumerable<KeyValuePair<string, Func<HmacInfo>>> Hmac => _hmac;
-        internal IEnumerable<KeyValuePair<string, Func<CompressionAlgorithm>>> Compression => _compression;
+        internal void MarkStarted() => _started = true;
+
+        // --- Read access for the library internals (Session / SshServer). These
+        // are deliberately not public - consumers configure through the selectors
+        // and ConfigureHazmat only. Each resolves the selector filter against the
+        // (mutable) registry and yields tag-aware entries so negotiation can log
+        // warnings for Custom/Obsolete algorithms.
+
+        internal IReadOnlyList<(string Name, TFactory Factory, HazmatAlgorithmTag Tag)> Resolve<TFactory>(
+            HazmatAlgorithmList<TFactory> list, IReadOnlyList<string>? selected, string category)
+        {
+            if (selected == null)
+                return list.TaggedEntries.ToArray();
+
+            var entries = list.TaggedEntries.ToList();
+            var result = new List<(string Name, TFactory Factory, HazmatAlgorithmTag Tag)>();
+            foreach (var name in selected)
+            {
+                var found = entries.FirstOrDefault(e => e.Name == name);
+                if (found.Name == null)
+                {
+                    Log.Warn($"Unknown {category} algorithm '{name}' - skipped.");
+                    continue;
+                }
+                result.Add(found);
+            }
+
+            if (result.Count == 0)
+                throw new InvalidOperationException($"No supported {category} algorithms configured.");
+
+            return result;
+        }
+
+        internal IReadOnlyList<(string Name, Func<KexAlgorithm> Factory, HazmatAlgorithmTag Tag)> KeyExchange
+            => Resolve(_keyExchange, KeyExchangeAlgorithms, "key exchange");
+
+        internal IReadOnlyList<(string Name, Func<string, PublicKeyAlgorithm> Factory, HazmatAlgorithmTag Tag)> PublicKey
+            => Resolve(_publicKey, HostKeyAlgorithms, "host key");
+
+        internal IReadOnlyList<(string Name, Func<CipherInfo> Factory, HazmatAlgorithmTag Tag)> Encryption
+            => Resolve(_encryption, EncryptionAlgorithms, "encryption");
+
+        internal IReadOnlyList<(string Name, Func<HmacInfo> Factory, HazmatAlgorithmTag Tag)> Hmac
+            => Resolve(_hmac, MacAlgorithms, "MAC");
+
+        internal IReadOnlyList<(string Name, Func<CompressionAlgorithm> Factory, HazmatAlgorithmTag Tag)> Compression
+            => Resolve(_compression, CompressionAlgorithms, "compression");
+
+        private Dictionary<string, (string Name, HazmatAlgorithmTag Tag)[]> Snapshot()
+        {
+            return new Dictionary<string, (string Name, HazmatAlgorithmTag Tag)[]>
+            {
+                ["key exchange"] = _keyExchange.TaggedEntries.Select(e => (e.Name, e.Tag)).ToArray(),
+                ["host key"] = _publicKey.TaggedEntries.Select(e => (e.Name, e.Tag)).ToArray(),
+                ["encryption"] = _encryption.TaggedEntries.Select(e => (e.Name, e.Tag)).ToArray(),
+                ["MAC"] = _hmac.TaggedEntries.Select(e => (e.Name, e.Tag)).ToArray(),
+                ["compression"] = _compression.TaggedEntries.Select(e => (e.Name, e.Tag)).ToArray(),
+            };
+        }
+
+        private static void EnsureUnique<TFactory>(HazmatAlgorithmList<TFactory> list, string category)
+        {
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var e in list.TaggedEntries)
+                if (!seen.Add(e.Name))
+                    throw new InvalidOperationException(
+                        $"Duplicate {category} algorithm name '{e.Name}' after ConfigureHazmat.");
+        }
+
+        private void LogConfigDiff(Dictionary<string, (string Name, HazmatAlgorithmTag Tag)[]> before)
+        {
+            LogDiff("key exchange", before, _keyExchange);
+            LogDiff("host key", before, _publicKey);
+            LogDiff("encryption", before, _encryption);
+            LogDiff("MAC", before, _hmac);
+            LogDiff("compression", before, _compression);
+        }
+
+        private static void LogDiff<TFactory>(string category,
+            Dictionary<string, (string Name, HazmatAlgorithmTag Tag)[]> before,
+            HazmatAlgorithmList<TFactory> list)
+        {
+            if (!Log.IsEnabled(LogLevel.Info))
+                return;
+
+            var prior = before.TryGetValue(category, out var p) ? p : [];
+            var priorNames = new HashSet<string>(prior.Select(x => x.Name), StringComparer.Ordinal);
+            var afterNames = new HashSet<string>(list.TaggedEntries.Select(e => e.Name), StringComparer.Ordinal);
+
+            var added = list.TaggedEntries.Where(e => !priorNames.Contains(e.Name)).ToArray();
+            var removed = prior.Where(x => !afterNames.Contains(x.Name)).ToArray();
+
+            var parts = new List<string>();
+            foreach (var e in added)
+            {
+                var label = e.Tag switch
+                {
+                    HazmatAlgorithmTag.Custom => "custom",
+                    HazmatAlgorithmTag.Alias => "alias",
+                    HazmatAlgorithmTag.Obsolete => "obsolete",
+                    _ => "added",
+                };
+                parts.Add($"{e.Name} ({label})");
+            }
+            foreach (var r in removed)
+                parts.Add($"-{r.Name}");
+
+            if (parts.Count > 0 && Log.IsEnabled(LogLevel.Info))
+                Log.Info($"ConfigureHazmat {category} diff: {string.Join(", ", parts)}.");
+        }
     }
 }

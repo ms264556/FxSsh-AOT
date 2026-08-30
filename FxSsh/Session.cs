@@ -45,6 +45,14 @@ namespace FxSsh
         private readonly Dictionary<string, Func<HmacInfo>> _hmacAlgorithms;
         private readonly Dictionary<string, Func<CompressionAlgorithm>> _compressionAlgorithms;
 
+        // Per-category tags used to warn when a Custom/Obsolete entry is actually
+        // negotiated. Names map 1:1 with the algorithm dictionaries above.
+        private readonly Dictionary<string, HazmatAlgorithmTag> _keyExchangeTags;
+        private readonly Dictionary<string, HazmatAlgorithmTag> _publicKeyTags;
+        private readonly Dictionary<string, HazmatAlgorithmTag> _encryptionTags;
+        private readonly Dictionary<string, HazmatAlgorithmTag> _hmacTags;
+        private readonly Dictionary<string, HazmatAlgorithmTag> _compressionTags;
+
         private readonly object _locker = new();
         private Socket _socket;
         private bool _disconnected;
@@ -112,16 +120,22 @@ namespace FxSsh
             ServerVersion = serverBanner;
 
             // The server's pluggable registry (seeded from AlgorithmRegistry
-            // and mutable via SshServer.Algorithms) is the source of truth for
-            // every category. The per-session dictionaries are copies taken at
-            // construction so later mutations to the shared registry do not
-            // disturb an in-flight session.
+            // and mutable via SshServer.Algorithms.ConfigureHazmat) is the source
+            // of truth for every category, filtered by any selectors set on it.
+            // The per-session dictionaries are copies taken at construction so
+            // later mutations to the shared registry do not disturb an in-flight
+            // session.
             algorithms ??= new AlgorithmSelection();
-            _keyExchangeAlgorithms = algorithms.KeyExchange.ToDictionary(x => x.Key, x => x.Value);
-            _publicKeyAlgorithms = algorithms.PublicKey.ToDictionary(x => x.Key, x => x.Value);
-            _encryptionAlgorithms = algorithms.Encryption.ToDictionary(x => x.Key, x => x.Value);
-            _hmacAlgorithms = algorithms.Hmac.ToDictionary(x => x.Key, x => x.Value);
-            _compressionAlgorithms = algorithms.Compression.ToDictionary(x => x.Key, x => x.Value);
+            _keyExchangeAlgorithms = CopyFactories(algorithms.KeyExchange);
+            _publicKeyAlgorithms = CopyFactories(algorithms.PublicKey);
+            _encryptionAlgorithms = CopyFactories(algorithms.Encryption);
+            _hmacAlgorithms = CopyFactories(algorithms.Hmac);
+            _compressionAlgorithms = CopyFactories(algorithms.Compression);
+            _keyExchangeTags = CopyTags(algorithms.KeyExchange);
+            _publicKeyTags = CopyTags(algorithms.PublicKey);
+            _encryptionTags = CopyTags(algorithms.Encryption);
+            _hmacTags = CopyTags(algorithms.Hmac);
+            _compressionTags = CopyTags(algorithms.Compression);
 
             // RFC 8332: advertise which signature algorithms we accept for
             // publickey auth. OpenSSH 8.8+ refuses to sign unless the server
@@ -129,6 +143,14 @@ namespace FxSsh
             // and we advertise "ext-info-s" in KEXINIT, so this must be sent.
             RegisterExtension("server-sig-algs", string.Join(",", _publicKeyAlgorithms.Keys));
         }
+
+        private static Dictionary<string, TFactory> CopyFactories<TFactory>(
+            IReadOnlyList<(string Name, TFactory Factory, HazmatAlgorithmTag Tag)> entries)
+            => entries.ToDictionary(e => e.Name, e => e.Factory);
+
+        private static Dictionary<string, HazmatAlgorithmTag> CopyTags<TFactory>(
+            IReadOnlyList<(string Name, TFactory Factory, HazmatAlgorithmTag Tag)> entries)
+            => entries.ToDictionary(e => e.Name, e => e.Tag);
 
         public event EventHandler<EventArgs> Disconnected;
 
@@ -1034,8 +1056,41 @@ namespace FxSsh
                 $"ctos={_exchangeContext.ClientEncryption}:{_exchangeContext.ClientHmac}:{_exchangeContext.ClientCompression}, " +
                 $"stoc={_exchangeContext.ServerEncryption}:{_exchangeContext.ServerHmac}:{_exchangeContext.ServerCompression}.");
 
+            WarnIfHazmatNegotiated();
+
             // RFC 8308: remember whether the client supports EXT_INFO.
             _clientAdvertisedExtInfo = message.PeerExtensions.Contains("ext-info-c");
+        }
+
+        /// <summary>
+        /// Warn (with the remote endpoint) whenever a Custom or Obsolete
+        /// algorithm entry is actually negotiated. Aliases resolve at the
+        /// severity of what they point to, so only Custom / Obsolete entries
+        /// (which cannot be laundered through an alias) produce a warning.
+        /// </summary>
+        private void WarnIfHazmatNegotiated()
+        {
+            LogWarnOnTag(_keyExchangeTags, _exchangeContext.KeyExchange, "key exchange");
+            LogWarnOnTag(_publicKeyTags, _exchangeContext.PublicKey, "host key");
+            LogWarnOnTag(_encryptionTags, _exchangeContext.ClientEncryption, "encryption");
+            LogWarnOnTag(_encryptionTags, _exchangeContext.ServerEncryption, "encryption");
+            LogWarnOnTag(_hmacTags, _exchangeContext.ClientHmac, "MAC");
+            LogWarnOnTag(_hmacTags, _exchangeContext.ServerHmac, "MAC");
+            LogWarnOnTag(_compressionTags, _exchangeContext.ClientCompression, "compression");
+            LogWarnOnTag(_compressionTags, _exchangeContext.ServerCompression, "compression");
+        }
+
+        private void LogWarnOnTag(IReadOnlyDictionary<string, HazmatAlgorithmTag> tags, string algorithm, string category)
+        {
+            if (!Log.IsEnabled(LogLevel.Warn))
+                return;
+
+            if (tags.TryGetValue(algorithm, out var tag)
+                && (tag == HazmatAlgorithmTag.Custom || tag == HazmatAlgorithmTag.Obsolete))
+            {
+                string remote = _socket.RemoteEndPoint?.ToString() ?? "?";
+                Log.Warn($"Session {remote} negotiated hazmat {category} algorithm '{algorithm}' ({tag}).");
+            }
         }
 
         private void HandleMessage(KeyExchangeXInitMessage message)

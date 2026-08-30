@@ -45,6 +45,18 @@ public sealed class TestSshServer : IAsyncDisposable
 
     public static TestSshServer Start(bool allHostKeyAlgorithms = false)
     {
+        var server = Create(allHostKeyAlgorithms);
+        server._server.StartAsync().GetAwaiter().GetResult();
+        return server;
+    }
+
+    /// <summary>
+    /// Build a fully-wired server (host keys, services, port) WITHOUT starting
+    /// its listener, so callers can run <c>Algorithms.ConfigureHazmat</c> before
+    /// <see cref="StartListening"/> (ConfigureHazmat must run before Start).
+    /// </summary>
+    public static TestSshServer Create(bool allHostKeyAlgorithms = false)
+    {
         var port = ReserveEphemeralPort();
         var disconnected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = new SshServer(new StartingInfo(IPAddress.Loopback, port, "SSH-2.0-FxSsh-Test"));
@@ -96,9 +108,15 @@ public sealed class TestSshServer : IAsyncDisposable
             };
         };
 
-        server.StartAsync().GetAwaiter().GetResult();
         return new TestSshServer(server, port, disconnected);
     }
+
+    /// <summary>
+    /// Start the listener. Use this only after the hazmat registry has been
+    /// configured (see <see cref="Create"/>); ConfigureHazmat must be called
+    /// before the server starts.
+    /// </summary>
+    public void StartListening() => _server.StartAsync().GetAwaiter().GetResult();
 
     private static int ReserveEphemeralPort()
     {

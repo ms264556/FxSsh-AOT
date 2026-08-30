@@ -104,13 +104,12 @@ public class AlgorithmMatrixInteropTests
         new(AlgoCategory.Kex, "ecdh-sha2-nistp256"),
         new(AlgoCategory.Kex, "ecdh-sha2-nistp384"),
         new(AlgoCategory.Kex, "ecdh-sha2-nistp521"),
+        new(AlgoCategory.Kex, "curve25519-sha256"),
         new(AlgoCategory.Kex, "diffie-hellman-group18-sha512"),
         new(AlgoCategory.Kex, "diffie-hellman-group16-sha512"),
         new(AlgoCategory.Kex, "diffie-hellman-group14-sha256"),
 
         // ---- key exchange: plugin ----
-        new(AlgoCategory.Kex, "curve25519-sha256"),
-        new(AlgoCategory.Kex, "curve25519-sha256@libssh.org", sshNetReported: "curve25519-sha256"),
         new(AlgoCategory.Kex, "diffie-hellman-group14-sha1"),
         new(AlgoCategory.Kex, "sntrup761x25519-sha512@openssh.com", sshNetReported: "sntrup761x25519-sha512"),
         new(AlgoCategory.Kex, "sntrup761x25519-sha512"),
@@ -168,8 +167,6 @@ public class AlgorithmMatrixInteropTests
     private static readonly Dictionary<string, Action<TestSshServer>> PluginRegistrations = new()
     {
         // ---- key exchange ----
-        ["curve25519-sha256"] = s => s.Algorithms.ConfigureHazmat(c => c.KeyExchange.Add("curve25519-sha256", () => new Curve25519Kex())),
-        ["curve25519-sha256@libssh.org"] = s => s.Algorithms.ConfigureHazmat(c => c.KeyExchange.Add("curve25519-sha256@libssh.org", () => new Curve25519Kex())),
         ["diffie-hellman-group14-sha1"] = s => s.Algorithms.ConfigureHazmat(c => c.KeyExchange.Add("diffie-hellman-group14-sha1", () => new LegacyDiffieHellmanKex())),
         ["sntrup761x25519-sha512@openssh.com"] = s => s.Algorithms.ConfigureHazmat(c => c.KeyExchange.Add("sntrup761x25519-sha512@openssh.com", () => new Sntrup761X25519Kex())),
         ["sntrup761x25519-sha512"] = s => s.Algorithms.ConfigureHazmat(c => c.KeyExchange.Add("sntrup761x25519-sha512", () => new Sntrup761X25519Kex())),
@@ -335,8 +332,9 @@ public class AlgorithmMatrixInteropTests
     [MemberData(nameof(SshNetRows))]
     public async Task Algorithm_negotiates_via_SSH_NET(AlgoCase algo)
     {
-        await using var server = TestSshServer.Start(allHostKeyAlgorithms: algo.AllHostKeys);
+        await using var server = TestSshServer.Create(allHostKeyAlgorithms: algo.AllHostKeys);
         RegisterPlugins(server, algo);
+        server.StartListening();
 
         var info = AlgorithmInteropHelper.CreateConnectionInfo(server.Port);
         switch (algo.Category)
@@ -419,8 +417,9 @@ public class AlgorithmMatrixInteropTests
             return;
         }
 
-        await using var server = TestSshServer.Start(allHostKeyAlgorithms: algo.AllHostKeys);
+        await using var server = TestSshServer.Create(allHostKeyAlgorithms: algo.AllHostKeys);
         RegisterPlugins(server, algo);
+        server.StartListening();
 
         var keyFile = Path.Combine(Path.GetTempPath(), $"fxssh-matrix-{Guid.NewGuid():N}.key");
         var knownHosts = Path.Combine(Path.GetTempPath(), $"fxssh-matrix-known-hosts-{Guid.NewGuid():N}");

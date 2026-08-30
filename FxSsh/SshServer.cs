@@ -63,6 +63,10 @@ namespace FxSsh
             _listenser.Server.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             _listenser.Start();
 
+            // From here on the algorithm registry is frozen for configuration:
+            // ConfigureHazmat may no longer be called.
+            Algorithms.MarkStarted();
+
             Log.Info($"SSH server listening on {StartingInfo.LocalAddress}:{StartingInfo.Port}.");
             LogCipherSuites();
 
@@ -82,11 +86,11 @@ namespace FxSsh
             if (!Log.IsEnabled(LogLevel.Info))
                 return;
 
-            var kex = Algorithms.KeyExchange.Select(x => x.Key);
-            var hostKey = Algorithms.PublicKey.Select(x => x.Key).Intersect(_hostKey.Keys);
-            var cipher = Algorithms.Encryption.Select(x => x.Key);
-            var mac = Algorithms.Hmac.Select(x => x.Key);
-            var compression = Algorithms.Compression.Select(x => x.Key);
+            var kex = Algorithms.KeyExchange.Select(x => x.Name);
+            var hostKey = Algorithms.PublicKey.Select(x => x.Name).Intersect(_hostKey.Keys);
+            var cipher = Algorithms.Encryption.Select(x => x.Name);
+            var mac = Algorithms.Hmac.Select(x => x.Name);
+            var compression = Algorithms.Compression.Select(x => x.Name);
 
             Log.Info("Server cipher suites: " +
                 $"kex=[{string.Join(",", kex)}], hostkey=[{string.Join(",", hostKey)}], " +

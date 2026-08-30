@@ -17,8 +17,9 @@ public class AlgorithmSelectionTests
     [Fact]
     public async Task Removed_algorithm_is_no_longer_advertised()
     {
-        await using var server = TestSshServer.Start();
+        await using var server = TestSshServer.Create();
         server.Algorithms.ConfigureHazmat(c => c.KeyExchange.Remove("ecdh-sha2-nistp384"));
+        server.StartListening();
 
         using var client = await RawSshClient.ConnectAsync(server.Port, TestContext.Current.CancellationToken);
         var kexList = ParseKexNameList(client.ServerKexInitPayload);
@@ -31,11 +32,12 @@ public class AlgorithmSelectionTests
     [Fact]
     public async Task Added_algorithm_is_advertised()
     {
-        await using var server = TestSshServer.Start();
+        await using var server = TestSshServer.Create();
         // The factory throws if ever invoked: advertising alone must not
         // instantiate the algorithm.
         server.Algorithms.ConfigureHazmat(c => c.KeyExchange.Add("test-kex@example.com",
             () => throw new NotSupportedException("test-kex@example.com must never be negotiated")));
+        server.StartListening();
 
         using var client = await RawSshClient.ConnectAsync(server.Port, TestContext.Current.CancellationToken);
         var kexList = ParseKexNameList(client.ServerKexInitPayload);
@@ -46,8 +48,9 @@ public class AlgorithmSelectionTests
     [Fact]
     public async Task Removed_algorithm_fails_negotiation_with_SSH_NET()
     {
-        await using var server = TestSshServer.Start();
+        await using var server = TestSshServer.Create();
         server.Algorithms.ConfigureHazmat(c => c.KeyExchange.Remove("diffie-hellman-group14-sha256"));
+        server.StartListening();
 
         var info = AlgorithmInteropHelper.CreateConnectionInfo(server.Port);
         AlgorithmInteropHelper.KeepOnly(info.KeyExchangeAlgorithms, "diffie-hellman-group14-sha256");
